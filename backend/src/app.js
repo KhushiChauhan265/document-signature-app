@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const authRoutes = require('./routes/auth');
 
 const app = express();
 
@@ -9,6 +10,9 @@ app.use(cors());
 
 // express.json() reads JSON data from incoming requests so we can access it using `req.body`
 app.use(express.json());
+
+// Mount authentication routes under the namespace /api/auth
+app.use('/api/auth', authRoutes);
 
 // Basic health check route to verify the server is running properly
 app.get('/api/health', (req, res) => {
