@@ -164,6 +164,11 @@ router.post('/:id/finalize', protect, async (req, res) => {
       return res.status(403).json({ message: 'Access denied: You do not own this document' });
     }
 
+    // Business Rule: Block owner finalize for many-people documents
+    if (document.signerType === 'many-people') {
+      return res.status(400).json({ message: 'Documents with "many-people" signing flow must be signed by the invited signers via their public links.' });
+    }
+
     // Retrieve all signature placements for this document
     const signatures = await Signature.find({ documentId: document._id });
     if (signatures.length === 0) {
@@ -306,6 +311,405 @@ router.get('/:id/download-signed', protect, async (req, res) => {
   } catch (error) {
     console.error('Error downloading signed PDF:', error.message);
     return res.status(500).json({ message: 'Server error downloading signed PDF' });
+  }
+});
+
+/**
+ * @route   POST /api/docs/:id/share
+ * @desc    Generate a secure public signing link for a document (Owner only, supports multiple emails)
+ * @access  Protected (Requires Token)
+ */
+router.post('/:id/share', protect, async (req, res) => {
+  const mongoose = require('mongoose');
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return res.status(400).json({ message: 'Invalid document ID format' });
+  }
+
+  try {
+    const { emails } = req.body;
+    if (!emails || !Array.isArray(emails) || emails.length === 0) {
+      return res.status(400).json({ message: 'Please provide a non-empty array of signer email addresses' });
+    }
+
+    const document = await Document.findById(req.params.id);
+    if (!document) {
+      return res.status(404).json({ message: 'Document not found' });
+    }
+
+    // Business Rule: only-you documents cannot show Invite Signer / call share route successfully
+    if (document.signerType !== 'many-people') {
+      return res.status(400).json({ message: 'Sharing is only allowed for documents with signerType "many-people"' });
+    }
+
+    // Business Rule: already signed documents cannot accept new invites
+    if (document.status === 'signed') {
+      return res.status(400).json({ message: 'This document has already been signed and finalized' });
+    }
+
+    // Validate emails and filter out duplicates
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const rawEmails = emails.map(e => e.trim().toLowerCase());
+    const uniqueEmails = [];
+    const skipped = [];
+    
+    for (const email of rawEmails) {
+      if (uniqueEmails.includes(email)) {
+        skipped.push(email);
+      } else {
+        uniqueEmails.push(email);
+      }
+    }
+
+    const invalidEmails = uniqueEmails.filter(e => !emailRegex.test(e));
+    if (invalidEmails.length > 0) {
+      return res.status(400).json({ message: `Invalid email address format: ${invalidEmails.join(', ')}` });
+    }
+
+    // Fetch placed signature coordinates
+    const signatures = await Signature.find({ documentId: document._id });
+    
+    // Business Rule: Prevent pure index-based mapping.
+    // Pair each placed signature box with an invited signer email explicitly.
+    if (signatures.length < uniqueEmails.length) {
+      return res.status(400).json({
+        message: `You have placed ${signatures.length} signature box(es), but you are inviting ${uniqueEmails.length} signer(s). Please place at least one signature box per signer in the editor.`
+      });
+    }
+
+    // Assign signer emails to signature coordinates explicitly (round-robin / one-to-one)
+    for (let i = 0; i < signatures.length; i++) {
+      const assignedEmail = uniqueEmails[i % uniqueEmails.length];
+      signatures[i].signerEmail = assignedEmail;
+      await signatures[i].save();
+    }
+
+    // Overwrite the document signers array with the new list
+    const crypto = require('crypto');
+    document.signers = [];
+
+    const sent = [];
+    const failed = [];
+
+    // Verify whether email credentials and frontend url are configured in .env
+    const isEnvConfigured = !!(process.env.EMAIL_USER && process.env.EMAIL_PASS && process.env.EMAIL_FROM && process.env.CLIENT_PUBLIC_SIGN_URL);
+
+    // Setup Nodemailer transporter if config is present
+    const nodemailer = require('nodemailer');
+    let transporter;
+    if (isEnvConfigured) {
+      try {
+        transporter = nodemailer.createTransport({
+          service: 'gmail',
+          auth: {
+            user: process.env.EMAIL_USER,
+            pass: process.env.EMAIL_PASS
+          }
+        });
+      } catch (err) {
+        console.error('Nodemailer transporter initialization failed:', err.message);
+      }
+    }
+
+    for (const email of uniqueEmails) {
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiry = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
+
+      document.signers.push({
+        email,
+        signingToken: token,
+        signingTokenExpires: expiry,
+        status: 'pending'
+      });
+
+      // Construct signing link
+      const link = `${process.env.CLIENT_PUBLIC_SIGN_URL || 'http://localhost:5173'}/?token=${token}`;
+
+      if (isEnvConfigured && transporter) {
+        const mailOptions = {
+          from: process.env.EMAIL_FROM,
+          to: email,
+          subject: `Signature Invitation for document: ${document.fileName}`,
+          text: `Hello,\n\nYou have been invited to sign the document "${document.fileName}" as an external signer.\n\nPlease open the following link to review and sign the document:\n\n${link}\n\nThis link will expire in 24 hours.\n\nThank you!`
+        };
+
+        try {
+          await transporter.sendMail(mailOptions);
+          sent.push({ email, link, status: 'sent' });
+        } catch (mailErr) {
+          console.error(`SMTP delivery failed to ${email}:`, mailErr.message);
+          failed.push({ email, error: `SMTP delivery failed: ${mailErr.message}`, link });
+        }
+      } else {
+        // Collect missing environment variables
+        const missingVars = [];
+        if (!process.env.EMAIL_USER) missingVars.push('EMAIL_USER');
+        if (!process.env.EMAIL_PASS) missingVars.push('EMAIL_PASS');
+        if (!process.env.EMAIL_FROM) missingVars.push('EMAIL_FROM');
+        if (!process.env.CLIENT_PUBLIC_SIGN_URL) missingVars.push('CLIENT_PUBLIC_SIGN_URL');
+
+        const errorMsg = missingVars.length > 0
+          ? `Email not sent. Missing env variables: ${missingVars.join(', ')}`
+          : 'Email not sent. SMTP initialization failed.';
+
+        failed.push({ email, error: errorMsg, link });
+      }
+    }
+
+    await document.save();
+
+    let message = 'Signing links generated successfully';
+    if (!isEnvConfigured) {
+      message = 'Signing links generated, but emails were not sent because SMTP credentials are missing in the backend .env';
+    } else if (failed.length > 0) {
+      message = sent.length > 0
+        ? 'Signing links generated; some invitation emails failed to send.'
+        : 'Signing links generated, but all invitation emails failed to send.';
+    } else {
+      message = 'Signing links generated and invitation emails sent successfully!';
+    }
+
+    return res.json({
+      message,
+      sent,
+      failed,
+      skipped,
+      signersCount: uniqueEmails.length,
+      emailServiceConfigured: isEnvConfigured
+    });
+
+  } catch (error) {
+    console.error('Error sharing document:', error.message);
+    return res.status(500).json({ message: 'Server error sharing document' });
+  }
+});
+
+/**
+ * @route   GET /api/docs/public/verify/:token
+ * @desc    Verify public signing token and return document details
+ * @access  Public
+ */
+router.get('/public/verify/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+    const document = await Document.findOne({ 'signers.signingToken': token });
+
+    if (!document) {
+      return res.status(404).json({ message: 'Invalid or expired signing link' });
+    }
+
+    const signer = document.signers.find(s => s.signingToken === token);
+    if (!signer) {
+      return res.status(404).json({ message: 'Invalid or expired signing link' });
+    }
+
+    // Check expiry
+    if (signer.signingTokenExpires && signer.signingTokenExpires < Date.now()) {
+      return res.status(400).json({ message: 'Signing link has expired' });
+    }
+
+    // Check if this signer already signed
+    if (signer.status === 'signed') {
+      return res.status(400).json({ message: 'You have already completed signing for this document' });
+    }
+
+    // Fetch coordinates
+    const signatures = await Signature.find({ documentId: document._id });
+
+    return res.json({
+      document: {
+        _id: document._id,
+        fileName: document.fileName,
+        signerEmail: signer.email,
+        status: document.status
+      },
+      signatures
+    });
+
+  } catch (error) {
+    console.error('Error verifying public token:', error.message);
+    return res.status(500).json({ message: 'Server error verifying public link' });
+  }
+});
+
+/**
+ * @route   GET /api/docs/public/view/:token
+ * @desc    Stream original PDF for public signer preview
+ * @access  Public
+ */
+router.get('/public/view/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+    const document = await Document.findOne({ 'signers.signingToken': token });
+
+    if (!document) {
+      return res.status(404).json({ message: 'Invalid or expired signing link' });
+    }
+
+    const signer = document.signers.find(s => s.signingToken === token);
+    if (!signer) {
+      return res.status(404).json({ message: 'Invalid or expired signing link' });
+    }
+
+    if (signer.signingTokenExpires && signer.signingTokenExpires < Date.now()) {
+      return res.status(400).json({ message: 'Signing link has expired' });
+    }
+
+    const filePath = path.join(UPLOAD_DIR, document.filePath);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ message: 'Original PDF file not found' });
+    }
+
+    res.setHeader('Content-Type', 'application/pdf');
+    return res.sendFile(filePath);
+
+  } catch (error) {
+    console.error('Error serving public PDF:', error.message);
+    return res.status(500).json({ message: 'Server error loading PDF preview' });
+  }
+});
+
+/**
+ * @route   POST /api/docs/public/sign/:token
+ * @desc    Submit signature publicly. Compiles final PDF only when all signers complete.
+ * @access  Public
+ */
+router.post('/public/sign/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+    const { signerName } = req.body;
+
+    if (!signerName || !signerName.trim()) {
+      return res.status(400).json({ message: 'Please provide your name to sign the document' });
+    }
+
+    const document = await Document.findOne({ 'signers.signingToken': token });
+    if (!document) {
+      return res.status(404).json({ message: 'Invalid or expired signing link' });
+    }
+
+    const signer = document.signers.find(s => s.signingToken === token);
+    if (!signer) {
+      return res.status(404).json({ message: 'Invalid or expired signing link' });
+    }
+
+    if (signer.signingTokenExpires && signer.signingTokenExpires < Date.now()) {
+      return res.status(400).json({ message: 'Signing link has expired' });
+    }
+
+    if (signer.status === 'signed') {
+      return res.status(400).json({ message: 'You have already signed this document' });
+    }
+
+    // Save signature info for this signer and invalidate token
+    signer.status = 'signed';
+    signer.name = signerName.trim();
+    signer.signedAt = new Date();
+    signer.signingToken = null;
+    signer.signingTokenExpires = null;
+
+    // Check if all signers are done
+    const allSigned = document.signers.every(s => s.status === 'signed');
+
+    if (allSigned) {
+      const signatures = await Signature.find({ documentId: document._id });
+      if (signatures.length === 0) {
+        return res.status(400).json({ message: 'Please place at least one signature box before finalizing.' });
+      }
+
+      const originalPath = path.join(UPLOAD_DIR, document.filePath);
+      if (!fs.existsSync(originalPath)) {
+        return res.status(404).json({ message: 'Original PDF file not found' });
+      }
+
+      // Read original PDF into buffer
+      const existingPdfBytes = fs.readFileSync(originalPath);
+
+      // Load PDF using pdf-lib
+      const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
+      const pdfDoc = await PDFDocument.load(existingPdfBytes);
+      const pages = pdfDoc.getPages();
+
+      // Embed HelveticaBold font
+      const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+      // Embed signatures in PDF using explicit mapping (paired by email)
+      for (const signature of signatures) {
+        const pageIndex = signature.page - 1;
+        if (pageIndex < 0 || pageIndex >= pages.length) {
+          continue;
+        }
+
+        const page = pages[pageIndex];
+        const { width, height } = page.getSize();
+
+        // Translate coordinates
+        const x_center = (signature.x / 100) * width;
+        const y_center = ((100 - signature.y) / 100) * height;
+
+        // Retrieve signer's name
+        const signerInfo = document.signers.find(s => s.email === signature.signerEmail);
+        const nameToStamp = signerInfo ? signerInfo.name : 'Signed';
+        
+        const text = `Signed by: ${nameToStamp}`;
+        const fontSize = 10;
+        const textWidth = font.widthOfTextAtSize(text, fontSize);
+        const paddingX = 8;
+        const paddingY = 6;
+        const boxWidth = textWidth + paddingX * 2;
+        const boxHeight = fontSize + paddingY * 2;
+
+        const drawX = x_center - (boxWidth / 2);
+        const drawY = y_center - (boxHeight / 2);
+
+        // Draw background box
+        page.drawRectangle({
+          x: drawX,
+          y: drawY,
+          width: boxWidth,
+          height: boxHeight,
+          color: rgb(0.9, 0.96, 0.95), // Teal-50
+          borderColor: rgb(0.08, 0.55, 0.49), // Teal-600
+          borderWidth: 1,
+        });
+
+        // Draw text
+        page.drawText(text, {
+          x: drawX + paddingX,
+          y: drawY + paddingY + 1.5,
+          size: fontSize,
+          font: font,
+          color: rgb(0.08, 0.55, 0.49), // Teal-600
+        });
+      }
+
+      // Save finalized PDF
+      const signedPdfBytes = await pdfDoc.save();
+      
+      const uniqueSuffix = Date.now();
+      const ext = path.extname(document.fileName);
+      const baseName = path.basename(document.fileName, ext).replace(/\s+/g, '_');
+      const signedFileName = `${baseName}-signed-${uniqueSuffix}${ext}`;
+      const signedFilePath = path.join(SIGNED_DIR, signedFileName);
+
+      fs.writeFileSync(signedFilePath, signedPdfBytes);
+
+      document.status = 'signed';
+      document.signedFilePath = signedFileName;
+
+      // Update all coordinates status to 'signed'
+      await Signature.updateMany({ documentId: document._id }, { status: 'signed' });
+    }
+
+    await document.save();
+
+    return res.json({
+      message: allSigned ? 'Document signed and finalized successfully' : 'Your signature has been saved successfully. Waiting for other signers.',
+      document
+    });
+
+  } catch (error) {
+    console.error('Error signing PDF publicly:', error.message);
+    return res.status(500).json({ message: 'Server error generating signed PDF document' });
   }
 });
 

@@ -44,14 +44,120 @@ function App() {
   const currentDoc = documents.find(d => d._id === activeDocumentId);
   const isSigned = currentDoc?.status === 'signed';
 
-  // Auto-login if token exists in localStorage on mount
+  // Day 9 Public Sharing & Sign States
+  const [publicToken, setPublicToken] = useState('');
+  const [publicDoc, setPublicDoc] = useState(null);
+  const [publicSignatures, setPublicSignatures] = useState([]);
+  const [signerName, setSignerName] = useState('');
+  const [isSigningPublic, setIsSigningPublic] = useState(false);
+  const [publicSignError, setPublicSignError] = useState('');
+  
+  // Dashboard Share Modal States
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [shareDocId, setShareDocId] = useState('');
+  const [shareEmails, setShareEmails] = useState('');
+  const [shareResults, setShareResults] = useState(null);
+  const [isGeneratingLink, setIsGeneratingLink] = useState(false);
+  const [shareError, setShareError] = useState('');
+
+  // Check for public signing token on mount or auto-login if token exists
   useEffect(() => {
-    if (token) {
+    const urlParams = new URLSearchParams(window.location.search);
+    const tokenParam = urlParams.get('token');
+    if (tokenParam) {
+      setPublicToken(tokenParam);
+      setView('public-sign');
+      fetchPublicDocument(tokenParam);
+    } else if (token) {
       setView('dashboard');
       fetchUserProfile(token);
       fetchDocuments(token);
     }
   }, [token]);
+
+  // Fetch public document details using the shared link token
+  const fetchPublicDocument = async (tokenParam) => {
+    setPublicSignError('');
+    try {
+      const response = await axios.get(`http://localhost:5000/api/docs/public/verify/${tokenParam}`);
+      setPublicDoc(response.data.document);
+      setPublicSignatures(response.data.signatures);
+      setPreviewFileUrl(`http://localhost:5000/api/docs/public/view/${tokenParam}`);
+      setPageNumber(1);
+    } catch (error) {
+      console.error('Failed to verify public signing link:', error);
+      const msg = error.response?.data?.message || 'Invalid or expired signing link.';
+      setPublicSignError(msg);
+      setView('public-error');
+    }
+  };
+
+  // Submit external signer name and complete finalization
+  const handlePublicSign = async (e) => {
+    e.preventDefault();
+    if (!signerName.trim()) {
+      alert('Please enter your name to sign.');
+      return;
+    }
+
+    setIsSigningPublic(true);
+    setPublicSignError('');
+    try {
+      await axios.post(`http://localhost:5000/api/docs/public/sign/${publicToken}`, {
+        signerName
+      });
+      setView('public-success');
+    } catch (error) {
+      console.error('Public signing failed:', error);
+      const msg = error.response?.data?.message || 'Failed to complete signing.';
+      alert(msg);
+    } finally {
+      setIsSigningPublic(false);
+    }
+  };
+
+  // Generate public signing link (called by owner)
+  const handleShareDocument = async (e) => {
+    e.preventDefault();
+    const emailsArray = shareEmails
+      .split(/[,\n;]+/)
+      .map(email => email.trim())
+      .filter(email => email.length > 0);
+
+    if (emailsArray.length === 0) {
+      setShareError('Please enter at least one valid email address.');
+      return;
+    }
+
+    setIsGeneratingLink(true);
+    setShareError('');
+    setShareResults(null);
+
+    try {
+      const response = await axios.post(`http://localhost:5000/api/docs/${shareDocId}/share`, {
+        emails: emailsArray
+      }, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+
+      setShareResults({
+        sent: response.data.sent || [],
+        failed: response.data.failed || [],
+        skipped: response.data.skipped || []
+      });
+      setShareEmails('');
+      // Refresh documents list to reflect updated sharing status if needed
+      fetchDocuments(token);
+    } catch (error) {
+      console.error('Failed to generate sharing link:', error);
+      const msg = error.response?.data?.message || 'Failed to generate sharing link.';
+      setShareError(msg);
+    } finally {
+      setIsGeneratingLink(false);
+    }
+  };
 
   // Fetch user profile from backend using JWT
   const fetchUserProfile = async (authToken) => {
@@ -383,7 +489,7 @@ function App() {
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans">
       
       {/* View: LOGGED OUT (Login/Register Forms) */}
-      {view !== 'dashboard' && (
+      {(view === 'login' || view === 'register') && (
         <div className="flex-1 flex items-center justify-center p-6">
           <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl p-8 shadow-sm">
             
@@ -680,18 +786,35 @@ function App() {
                                 </button>
                               </div>
                             ) : (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setPreviewFileUrl(`http://localhost:5000/uploads/${doc.filePath}`);
-                                  setActiveDocumentId(doc._id);
-                                  fetchSignatures(doc._id, token);
-                                  setPageNumber(1);
-                                }}
-                                className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 rounded-lg text-[10px] font-bold transition cursor-pointer"
-                              >
-                                Open Editor
-                              </button>
+                              <div className="flex gap-2 justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setPreviewFileUrl(`http://localhost:5000/uploads/${doc.filePath}`);
+                                    setActiveDocumentId(doc._id);
+                                    fetchSignatures(doc._id, token);
+                                    setPageNumber(1);
+                                  }}
+                                  className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 rounded-lg text-[10px] font-bold transition cursor-pointer"
+                                >
+                                  Open Editor
+                                </button>
+                                {doc.signerType === 'many-people' && doc.status === 'pending' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setShareDocId(doc._id);
+                                      setIsShareModalOpen(true);
+                                      setShareEmails('');
+                                      setShareResults(null);
+                                      setShareError('');
+                                    }}
+                                    className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-[10px] font-bold transition cursor-pointer"
+                                  >
+                                    Invite Signer
+                                  </button>
+                                )}
+                              </div>
                             )}
                           </td>
                         </tr>
@@ -830,9 +953,9 @@ function App() {
                 <div className="border-t border-slate-100 px-6 py-4 flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className="text-xs text-slate-500 font-medium">
-                      Page {pageNumber} of {numPages || '?'}
+                              Page {pageNumber} of {numPages || '?'}
                     </div>
-                    {!isSigned && (
+                    {!isSigned && currentDoc?.signerType === 'only-you' && (
                       <button
                         type="button"
                         onClick={handleFinalizeDocument}
@@ -867,6 +990,358 @@ function App() {
             </div>
           )}
 
+          {/* Invite Signer / Share Modal */}
+          {isShareModalOpen && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 overflow-y-auto">
+              <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-md flex flex-col shadow-xl p-6 gap-4">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <h3 className="text-sm font-bold text-slate-800">Invite External Signers</h3>
+                  <button 
+                    onClick={() => { setIsShareModalOpen(false); setShareEmails(''); setShareResults(null); setShareError(''); }}
+                    className="text-slate-400 hover:text-slate-600 font-bold text-lg px-2 cursor-pointer"
+                  >
+                    &times;
+                  </button>
+                </div>
+
+                {shareError && (
+                  <div className="bg-rose-50 border border-rose-100 text-rose-700 text-xs rounded-xl p-3 font-medium">
+                    ⚠️ {shareError}
+                  </div>
+                )}
+
+                {!shareResults ? (
+                  <form onSubmit={handleShareDocument} className="flex flex-col gap-4">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-semibold text-slate-600">Signers' Email Addresses</label>
+                      <textarea 
+                        rows="4"
+                        value={shareEmails}
+                        onChange={(e) => setShareEmails(e.target.value)}
+                        placeholder="Enter emails (comma-separated or one per line)&#10;e.g. signer1@gmail.com, signer2@gmail.com" 
+                        required
+                        className="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-xs focus:outline-none focus:border-teal-500 bg-slate-50/50 resize-y"
+                      />
+                      <p className="text-[10px] text-slate-400 leading-normal mt-0.5">
+                        Each invited signer will get their own unique secure token, expiry, and email invitation.
+                      </p>
+                    </div>
+
+                    <button 
+                      type="submit" 
+                      disabled={isGeneratingLink}
+                      className="w-full bg-teal-600 hover:bg-teal-700 disabled:bg-slate-300 text-white rounded-xl py-2 font-bold text-xs transition cursor-pointer shadow-sm"
+                    >
+                      {isGeneratingLink ? 'Sending Invites...' : 'Invite Signers'}
+                    </button>
+                  </form>
+                ) : (
+                  <div className="flex flex-col gap-4">
+                    {/* Dynamic Status Card */}
+                    {shareResults.sent.length > 0 && shareResults.failed.length === 0 ? (
+                      <div className="bg-emerald-50 border border-emerald-100 text-emerald-800 text-xs rounded-xl p-4 flex flex-col gap-2 font-medium">
+                        <div className="font-bold text-emerald-900 flex items-center gap-1.5">
+                          ✓ Invitations Emailed!
+                        </div>
+                        <p className="leading-relaxed text-[11px] text-emerald-700 font-normal">
+                          All invitation emails were sent successfully to the signers.
+                        </p>
+                      </div>
+                    ) : shareResults.sent.length > 0 && shareResults.failed.length > 0 ? (
+                      <div className="bg-amber-50 border border-amber-100 text-amber-800 text-xs rounded-xl p-4 flex flex-col gap-2 font-medium">
+                        <div className="font-bold text-amber-900 flex items-center gap-1.5">
+                          ⚠ Partial Sending Success
+                        </div>
+                        <p className="leading-relaxed text-[11px] text-amber-700 font-normal">
+                          Some emails were sent successfully, but others failed. You can copy the links below to manually share them.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="bg-rose-50 border border-rose-100 text-rose-800 text-xs rounded-xl p-4 flex flex-col gap-2 font-medium">
+                        <div className="font-bold text-rose-900 flex items-center gap-1.5">
+                          ⚠ Email Sending Failed / Skipped
+                        </div>
+                        <p className="leading-relaxed text-[11px] text-rose-700 font-normal">
+                          Emails could not be sent (SMTP config missing or network error). However, the signing links were generated successfully. You can copy them below to share manually.
+                        </p>
+                      </div>
+                    )}
+
+                    {shareResults.sent.length > 0 && (
+                      <div className="flex flex-col gap-2">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">Emailed Successfully ({shareResults.sent.length})</span>
+                        <div className="max-h-40 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100 bg-slate-50/50">
+                          {shareResults.sent.map((item, idx) => (
+                            <div key={idx} className="p-2.5 flex flex-col gap-1.5 text-xs">
+                              <div className="font-semibold text-slate-800 truncate">{item.email}</div>
+                              <div className="flex gap-2 items-center">
+                                <input 
+                                  type="text" 
+                                  readOnly 
+                                  value={item.link}
+                                  className="flex-1 border border-slate-200 rounded-lg px-2 py-1 text-[10px] bg-white font-mono"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(item.link);
+                                    alert(`Copied link for ${item.email}`);
+                                  }}
+                                  className="px-2 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-[10px] font-bold transition cursor-pointer"
+                                >
+                                  Copy
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {shareResults.failed.length > 0 && (
+                      <div className="flex flex-col gap-2">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-rose-600">Failed / Not Sent (Links Available) ({shareResults.failed.length})</span>
+                        <div className="max-h-40 overflow-y-auto border border-rose-200 rounded-xl divide-y divide-rose-100 bg-rose-50/20">
+                          {shareResults.failed.map((item, idx) => (
+                            <div key={idx} className="p-2.5 text-xs flex flex-col gap-1.5">
+                              <div className="font-semibold text-rose-900 truncate">{item.email}</div>
+                              <div className="text-[10px] text-rose-600 italic font-medium">Reason: {item.error}</div>
+                              {item.link && (
+                                <div className="flex gap-2 items-center mt-1">
+                                  <input 
+                                    type="text" 
+                                    readOnly 
+                                    value={item.link}
+                                    className="flex-1 border border-rose-200 rounded-lg px-2 py-1 text-[10px] bg-white font-mono"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(item.link);
+                                      alert(`Copied link for ${item.email}`);
+                                    }}
+                                    className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[10px] font-bold transition cursor-pointer"
+                                  >
+                                    Copy
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {shareResults.skipped.length > 0 && (
+                      <div className="flex flex-col gap-2">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-amber-600">Skipped Duplicates ({shareResults.skipped.length})</span>
+                        <div className="max-h-24 overflow-y-auto border border-amber-200 rounded-xl divide-y divide-amber-100 bg-amber-50/20">
+                          {shareResults.skipped.map((email, idx) => (
+                            <div key={idx} className="p-2 px-2.5 text-xs text-amber-800 font-medium">
+                              {email}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => { setIsShareModalOpen(false); setShareResults(null); }}
+                      className="w-full bg-slate-800 hover:bg-slate-900 text-white rounded-xl py-2 font-bold text-xs transition cursor-pointer shadow-sm mt-2"
+                    >
+                      Done
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+        </div>
+      )}
+
+      {/* View: PUBLIC SIGNING PAGE */}
+      {view === 'public-sign' && publicDoc && (
+        <div className="flex-1 flex flex-col">
+          {/* Header */}
+          <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shadow-sm">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-teal-600 flex items-center justify-center text-white font-extrabold text-lg shadow-sm">
+                S
+              </div>
+              <span className="text-md font-bold tracking-tight text-slate-900">
+                Secure Public Document Signature Gateway
+              </span>
+            </div>
+          </header>
+
+          {/* Main area split into preview and signature action form */}
+          <main className="flex-1 max-w-5xl w-full mx-auto p-6 flex flex-col md:flex-row gap-6">
+            
+            {/* Left: Signature Confirmation Action Card */}
+            <div className="w-full md:w-80 flex flex-col gap-4 shrink-0">
+              <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col gap-4">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800">Complete Your Signature</h3>
+                  <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
+                    You have been invited to sign this document. Review the PDF and enter your full name below to sign.
+                  </p>
+                </div>
+
+                <div className="border-t border-slate-100 pt-3 flex flex-col gap-1 text-[11px] text-slate-500">
+                  <div><strong>File Name:</strong> {publicDoc.fileName}</div>
+                  <div><strong>Your Email:</strong> {publicDoc.signerEmail}</div>
+                </div>
+
+                <form onSubmit={handlePublicSign} className="flex flex-col gap-3.5 border-t border-slate-100 pt-3">
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-semibold text-slate-600">Your Full Name</label>
+                    <input 
+                      type="text" 
+                      value={signerName}
+                      onChange={(e) => setSignerName(e.target.value)}
+                      placeholder="Type your name to sign" 
+                      required
+                      className="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-xs focus:outline-none focus:border-teal-500 bg-slate-50/50"
+                    />
+                  </div>
+
+                  <button 
+                    type="submit" 
+                    disabled={isSigningPublic}
+                    className="w-full bg-teal-600 hover:bg-teal-700 disabled:bg-slate-300 text-white rounded-xl py-2.5 font-bold text-xs transition cursor-pointer shadow-sm"
+                  >
+                    {isSigningPublic ? 'Signing Document...' : 'Sign & Complete'}
+                  </button>
+                </form>
+              </div>
+
+              <div className="text-[10px] text-slate-400 leading-relaxed bg-white border border-slate-200/60 p-4 rounded-xl">
+                💡 **How it works**: Hover over the document pages to locate the designated **"Sign Here"** boxes. Your typed signature name will be embedded directly in the PDF document at those positions.
+              </div>
+            </div>
+
+            {/* Right: PDF Previewer */}
+            <div className="flex-1 bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col items-center justify-between min-h-[500px]">
+              <div 
+                className="relative border border-slate-300 shadow-md select-none my-auto"
+              >
+                <PDFDocument
+                  file={previewFileUrl}
+                  onLoadSuccess={onDocumentLoadSuccess}
+                  loading={<div className="text-xs text-slate-500 font-medium">Loading document preview...</div>}
+                  error={<div className="text-xs text-rose-500 font-medium">Failed to load PDF preview.</div>}
+                >
+                  <PDFPage 
+                    pageNumber={pageNumber} 
+                    renderTextLayer={false} 
+                    renderAnnotationLayer={false}
+                    className="max-w-full"
+                  />
+                </PDFDocument>
+
+                {/* Render absolute overlays of signature positions */}
+                {publicSignatures
+                  .filter(sig => sig.page === pageNumber)
+                  .map((sig, idx) => {
+                    const isMine = sig.signerEmail === publicDoc.signerEmail;
+                    return (
+                      <div
+                        key={sig._id || idx}
+                        style={{
+                          left: `${sig.x}%`,
+                          top: `${sig.y}%`,
+                          transform: 'translate(-50%, -50%)'
+                        }}
+                        className={`absolute border text-[9px] font-bold px-2.5 py-1 rounded shadow-md select-none whitespace-nowrap flex items-center gap-1.5 ${
+                          isMine 
+                            ? 'bg-teal-500/20 border-teal-500 text-teal-700' 
+                            : 'bg-slate-300/30 border-slate-400 text-slate-500 opacity-60'
+                        }`}
+                      >
+                        <svg className={`w-3 h-3 ${isMine ? 'text-teal-600' : 'text-slate-500'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                        </svg>
+                        {isMine ? 'Sign Here (You)' : `Sign Here (${sig.signerEmail || 'Other'})`}
+                      </div>
+                    );
+                  })}
+              </div>
+
+              {/* Page navigation controls */}
+              <div className="flex items-center justify-between w-full border-t border-slate-100 pt-4 mt-6">
+                <div className="text-xs text-slate-500 font-medium">
+                  Page {pageNumber} of {numPages || '?'}
+                </div>
+                
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={pageNumber <= 1}
+                    onClick={() => setPageNumber(prev => Math.max(prev - 1, 1))}
+                    className="px-3 py-1 bg-slate-100 border border-slate-200 hover:bg-slate-200 disabled:bg-slate-50 disabled:text-slate-300 rounded-lg text-xs font-semibold transition cursor-pointer"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    type="button"
+                    disabled={pageNumber >= numPages}
+                    onClick={() => setPageNumber(prev => Math.min(prev + 1, numPages))}
+                    className="px-3 py-1 bg-slate-100 border border-slate-200 hover:bg-slate-200 disabled:bg-slate-50 disabled:text-slate-300 rounded-lg text-xs font-semibold transition cursor-pointer"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </div>
+
+          </main>
+        </div>
+      )}
+
+      {/* View: PUBLIC SIGNING SUCCESS */}
+      {view === 'public-success' && (
+        <div className="flex-1 flex items-center justify-center p-6 bg-slate-50">
+          <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl p-8 shadow-sm text-center flex flex-col items-center gap-4">
+            <div className="w-12 h-12 bg-emerald-50 border border-emerald-100 rounded-full flex items-center justify-center text-emerald-600 text-xl font-bold shadow-sm">
+              ✓
+            </div>
+            <h2 className="text-lg font-bold text-slate-900">Signing Completed!</h2>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              Thank you! The document has been finalized and compiled with your signature successfully. 
+              The document owner has been notified.
+            </p>
+            <div className="text-[10px] text-slate-400 italic mt-2">
+              You can close this tab now.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* View: PUBLIC SIGNING ERROR */}
+      {view === 'public-error' && (
+        <div className="flex-1 flex items-center justify-center p-6 bg-slate-50">
+          <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl p-8 shadow-sm text-center flex flex-col items-center gap-4">
+            <div className="w-12 h-12 bg-rose-50 border border-rose-100 rounded-full flex items-center justify-center text-rose-600 text-lg font-bold shadow-sm">
+              ⚠️
+            </div>
+            <h2 className="text-lg font-bold text-slate-900">Access Error</h2>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              {publicSignError || 'The public signing link is invalid, has expired, or has already been used.'}
+            </p>
+            <button
+              onClick={() => {
+                const url = new URL(window.location.href);
+                url.searchParams.delete('token');
+                window.history.replaceState({}, document.title, url.pathname);
+                setView('login');
+              }}
+              className="mt-2 px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition cursor-pointer"
+            >
+              Go to Login Page
+            </button>
+          </div>
         </div>
       )}
 

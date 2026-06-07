@@ -32,6 +32,14 @@ const DocumentSchema = new mongoose.Schema({
   signedFilePath: {
     type: String, // Tracks the generated signed PDF filename on disk
   },
+  signers: [{
+    email: { type: String, required: true },
+    name: { type: String }, // Filled when signing
+    signingToken: { type: String },
+    signingTokenExpires: { type: Date },
+    status: { type: String, enum: ['pending', 'signed'], default: 'pending' },
+    signedAt: { type: Date }
+  }],
 }, {
   // Automatically adds 'createdAt' and 'updatedAt' timestamps
   timestamps: true

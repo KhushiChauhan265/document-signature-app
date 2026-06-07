@@ -30,6 +30,9 @@ const SignatureSchema = new mongoose.Schema({
     enum: ['pending', 'signed'],
     default: 'pending', // Keeps track of signature box state
   },
+  signerEmail: {
+    type: String, // Explicitly links this signature box to an invited signer
+  },
 }, {
   // Automatically adds 'createdAt' and 'updatedAt' timestamps
   timestamps: true
