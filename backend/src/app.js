@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 const authRoutes = require('./routes/auth');
 const docRoutes = require('./routes/docs');
 
@@ -11,6 +12,10 @@ app.use(cors());
 
 // express.json() reads JSON data from incoming requests so we can access it using `req.body`
 app.use(express.json());
+
+// Serve the uploads folder as static files
+// This allows the frontend to request and load PDF files for previewing
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Mount routers
 app.use('/api/auth', authRoutes);

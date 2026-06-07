@@ -1,5 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { Document as PDFDocument, Page as PDFPage, pdfjs } from 'react-pdf';
+
+// Configure the pdfjs worker to resolve react-pdf dependency
+pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
 function App() {
   // Navigation State: 'login', 'register', or 'dashboard'
@@ -27,11 +31,18 @@ function App() {
   const [uploadSuccess, setUploadSuccess] = useState('');
   const [isUploading, setIsUploading] = useState(false);
 
+  // Day 4 Document List & PDF Preview States
+  const [documents, setDocuments] = useState([]);
+  const [previewFileUrl, setPreviewFileUrl] = useState('');
+  const [numPages, setNumPages] = useState(null);
+  const [pageNumber, setPageNumber] = useState(1);
+
   // Auto-login if token exists in localStorage on mount
   useEffect(() => {
     if (token) {
       setView('dashboard');
       fetchUserProfile(token);
+      fetchDocuments(token);
     }
   }, [token]);
 
@@ -48,6 +59,20 @@ function App() {
     } catch (error) {
       console.error('Session fetch failed:', error);
       handleLogout();
+    }
+  };
+
+  // Fetch all documents uploaded by this user
+  const fetchDocuments = async (authToken) => {
+    try {
+      const response = await axios.get('http://localhost:5000/api/docs/', {
+        headers: {
+          Authorization: `Bearer ${authToken}`
+        }
+      });
+      setDocuments(response.data);
+    } catch (error) {
+      console.error('Error fetching documents list:', error.message);
     }
   };
 
@@ -149,6 +174,9 @@ function App() {
       setSelectedFile(null);
       // Reset form fields
       e.target.reset();
+      
+      // Refresh documents list
+      fetchDocuments(token);
     } catch (error) {
       console.error('Upload request failed:', error);
       const msg = error.response && error.response.data && error.response.data.message
@@ -160,16 +188,33 @@ function App() {
     }
   };
 
+  // PDF page load callback
+  const onDocumentLoadSuccess = ({ numPages }) => {
+    setNumPages(numPages);
+    setPageNumber(1);
+  };
+
+  // Helper: Format file bytes size to readable KB/MB
+  const formatBytes = (bytes) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  };
+
   // Logout Handler
   const handleLogout = () => {
     localStorage.removeItem('docSignToken');
     setToken('');
     setUser(null);
+    setDocuments([]);
     setSuccessMessage('');
     setErrorMessage('');
     setUploadError('');
     setUploadSuccess('');
     setSelectedFile(null);
+    setPreviewFileUrl('');
     setView('login');
   };
 
@@ -333,7 +378,7 @@ function App() {
           </header>
 
           {/* Main Content Area */}
-          <main className="flex-1 max-w-2xl w-full mx-auto p-6 lg:p-8 flex flex-col gap-6">
+          <main className="flex-1 max-w-4xl w-full mx-auto p-6 lg:p-8 flex flex-col gap-6">
             
             {/* Welcome banner */}
             <div>
@@ -399,20 +444,137 @@ function App() {
               </form>
             </div>
 
-            {/* Document Workspace Placeholder Empty State */}
-            <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-8 flex flex-col items-center justify-center text-center">
-              <div className="w-12 h-12 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-300 mb-3">
-                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-              </div>
-              <h3 className="text-xs font-bold text-slate-700">No documents in this workspace</h3>
-              <p className="text-[11px] text-slate-400 max-w-sm mt-1.5 leading-relaxed">
-                Your workspace documents will appear here once the document database viewing flow (Day 4) is completed.
-              </p>
+            {/* Document Listing Workspace */}
+            <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6 flex flex-col gap-4">
+              <h3 className="text-sm font-bold text-slate-800">Workspace Documents</h3>
+
+              {documents.length === 0 ? (
+                /* Empty State */
+                <div className="flex flex-col items-center justify-center text-center p-8">
+                  <div className="w-12 h-12 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-300 mb-3">
+                    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                  </div>
+                  <h4 className="text-xs font-bold text-slate-700">No documents in this workspace</h4>
+                  <p className="text-[11px] text-slate-400 max-w-sm mt-1.5 leading-relaxed">
+                    Upload a PDF document above to get started with your digital signature workspace.
+                  </p>
+                </div>
+              ) : (
+                /* Document Table List */
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-slate-400 font-semibold uppercase tracking-wider">
+                        <th className="py-3 px-2">Document Name</th>
+                        <th className="py-3 px-2">Size</th>
+                        <th className="py-3 px-2">Date Added</th>
+                        <th className="py-3 px-2">Signing Flow</th>
+                        <th className="py-3 px-2 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-slate-700">
+                      {documents.map((doc) => (
+                        <tr key={doc._id} className="hover:bg-slate-50/50 transition duration-150">
+                          <td className="py-3.5 px-2 font-medium text-slate-900 max-w-[200px] truncate" title={doc.fileName}>
+                            {doc.fileName}
+                          </td>
+                          <td className="py-3.5 px-2 text-slate-500">
+                            {formatBytes(doc.fileSize)}
+                          </td>
+                          <td className="py-3.5 px-2 text-slate-500">
+                            {new Date(doc.createdAt).toLocaleDateString()}
+                          </td>
+                          <td className="py-3.5 px-2">
+                            <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+                              {doc.signerType === 'only-you' ? 'Only You' : 'Many People'}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-2 text-right">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPreviewFileUrl(`http://localhost:5000/uploads/${doc.filePath}`);
+                                setPageNumber(1);
+                              }}
+                              className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 rounded-lg text-[10px] font-bold transition cursor-pointer"
+                            >
+                              Preview PDF
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
 
           </main>
+
+          {/* PDF Preview Modal */}
+          {previewFileUrl && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 overflow-y-auto">
+              <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-2xl flex flex-col shadow-xl my-8">
+                
+                {/* Modal Header */}
+                <div className="border-b border-slate-100 px-6 py-4 flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-slate-800">Document Preview</h3>
+                  <button 
+                    onClick={() => setPreviewFileUrl('')}
+                    className="text-slate-400 hover:text-slate-600 font-bold text-lg px-2 cursor-pointer"
+                  >
+                    &times;
+                  </button>
+                </div>
+
+                {/* PDF Renderer Body */}
+                <div className="p-6 flex flex-col items-center justify-center bg-slate-100/60 overflow-x-auto min-h-[400px]">
+                  <PDFDocument
+                    file={previewFileUrl}
+                    onLoadSuccess={onDocumentLoadSuccess}
+                    loading={<div className="text-xs text-slate-500 font-medium">Loading document...</div>}
+                    error={<div className="text-xs text-rose-500 font-medium">Failed to load PDF preview.</div>}
+                  >
+                    <PDFPage 
+                      pageNumber={pageNumber} 
+                      renderTextLayer={false} 
+                      renderAnnotationLayer={false}
+                      className="border border-slate-200 shadow-md max-w-full"
+                    />
+                  </PDFDocument>
+                </div>
+
+                {/* Modal Footer Controls */}
+                <div className="border-t border-slate-100 px-6 py-4 flex items-center justify-between">
+                  <div className="text-xs text-slate-500 font-medium">
+                    Page {pageNumber} of {numPages || '?'}
+                  </div>
+                  
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={pageNumber <= 1}
+                      onClick={() => setPageNumber(prev => Math.max(prev - 1, 1))}
+                      className="px-3 py-1 bg-slate-100 border border-slate-200 hover:bg-slate-200 disabled:bg-slate-50 disabled:text-slate-300 rounded-lg text-xs font-semibold transition cursor-pointer"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      type="button"
+                      disabled={pageNumber >= numPages}
+                      onClick={() => setPageNumber(prev => Math.min(prev + 1, numPages))}
+                      className="px-3 py-1 bg-slate-100 border border-slate-200 hover:bg-slate-200 disabled:bg-slate-50 disabled:text-slate-300 rounded-lg text-xs font-semibold transition cursor-pointer"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          )}
 
         </div>
       )}

@@ -91,4 +91,45 @@ router.post('/upload', protect, (req, res) => {
   });
 });
 
+/**
+ * @route   GET /api/docs/
+ * @desc    Fetch all documents uploaded by the logged-in user
+ * @access  Protected (Requires Token)
+ */
+router.get('/', protect, async (req, res) => {
+  try {
+    // Retrieve all documents owned by the logged-in user, sorted by newest first
+    const documents = await Document.find({ uploadedBy: req.user._id }).sort({ createdAt: -1 });
+    return res.json(documents);
+  } catch (error) {
+    console.error('Error fetching documents list:', error.message);
+    return res.status(500).json({ message: 'Server error fetching documents' });
+  }
+});
+
+/**
+ * @route   GET /api/docs/:id
+ * @desc    Fetch a specific document's metadata (with ownership validation)
+ * @access  Protected (Requires Token)
+ */
+router.get('/:id', protect, async (req, res) => {
+  try {
+    const document = await Document.findById(req.params.id);
+
+    if (!document) {
+      return res.status(404).json({ message: 'Document not found' });
+    }
+
+    // Validate ownership: only the uploader can view this document
+    if (document.uploadedBy.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Access denied: You do not own this document' });
+    }
+
+    return res.json(document);
+  } catch (error) {
+    console.error('Error fetching document details:', error.message);
+    return res.status(500).json({ message: 'Server error retrieving document metadata' });
+  }
+});
+
 module.exports = router;
