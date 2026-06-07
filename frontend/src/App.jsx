@@ -31,11 +31,15 @@ function App() {
   const [uploadSuccess, setUploadSuccess] = useState('');
   const [isUploading, setIsUploading] = useState(false);
 
-  // Day 4 Document List & PDF Preview States
+  // Day 4 Document List States
   const [documents, setDocuments] = useState([]);
+  
+  // Day 5 & 6 PDF Editor & Drag & Drop Signature States
+  const [activeDocumentId, setActiveDocumentId] = useState('');
   const [previewFileUrl, setPreviewFileUrl] = useState('');
   const [numPages, setNumPages] = useState(null);
   const [pageNumber, setPageNumber] = useState(1);
+  const [signatures, setSignatures] = useState([]);
 
   // Auto-login if token exists in localStorage on mount
   useEffect(() => {
@@ -73,6 +77,20 @@ function App() {
       setDocuments(response.data);
     } catch (error) {
       console.error('Error fetching documents list:', error.message);
+    }
+  };
+
+  // Fetch saved signature positions for a document
+  const fetchSignatures = async (docId, authToken) => {
+    try {
+      const response = await axios.get(`http://localhost:5000/api/signatures/${docId}`, {
+        headers: {
+          Authorization: `Bearer ${authToken}`
+        }
+      });
+      setSignatures(response.data);
+    } catch (error) {
+      console.error('Error fetching signatures:', error.message);
     }
   };
 
@@ -172,10 +190,8 @@ function App() {
       
       setUploadSuccess(`Document "${response.data.document.fileName}" uploaded successfully!`);
       setSelectedFile(null);
-      // Reset form fields
       e.target.reset();
       
-      // Refresh documents list
       fetchDocuments(token);
     } catch (error) {
       console.error('Upload request failed:', error);
@@ -194,6 +210,69 @@ function App() {
     setPageNumber(1);
   };
 
+  // HTML5 Drag Drop Handler: Drop element onto PDF page canvas
+  const handlePageDrop = async (e) => {
+    e.preventDefault();
+    if (!activeDocumentId) return;
+
+    // Get the page bounding box
+    const rect = e.currentTarget.getBoundingClientRect();
+    
+    // Calculate cursor drop coordinates relative to container
+    const clientX = e.clientX - rect.left;
+    const clientY = e.clientY - rect.top;
+
+    // Convert pixels to relative percentages (0 to 100)
+    const xPercent = (clientX / rect.width) * 100;
+    const yPercent = (clientY / rect.height) * 100;
+
+    // Read the drag payload content
+    const dragData = e.dataTransfer.getData('text/plain');
+
+    if (dragData === 'new-signature') {
+      // 1. User dropped a NEW signature field from the sidebar palette
+      try {
+        const response = await axios.post('http://localhost:5000/api/signatures', {
+          documentId: activeDocumentId,
+          x: parseFloat(xPercent.toFixed(2)),
+          y: parseFloat(yPercent.toFixed(2)),
+          page: pageNumber
+        }, {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
+
+        // Add to local state list to render instantly
+        setSignatures(prev => [...prev, response.data.signature]);
+      } catch (error) {
+        console.error('Error creating signature position:', error);
+        alert('Could not place signature box. Verify you own this document.');
+      }
+    } else if (dragData.startsWith('move-signature-')) {
+      // 2. User dragged and dropped an EXISTING signature box to reposition it
+      const signatureId = dragData.split('-')[2];
+
+      try {
+        const response = await axios.put(`http://localhost:5000/api/signatures/${signatureId}`, {
+          x: parseFloat(xPercent.toFixed(2)),
+          y: parseFloat(yPercent.toFixed(2)),
+          page: pageNumber
+        }, {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
+
+        // Update coordinate details in local React state
+        setSignatures(prev => prev.map(sig => sig._id === signatureId ? response.data.signature : sig));
+      } catch (error) {
+        console.error('Error updating signature position:', error);
+        alert('Failed to update signature box position.');
+      }
+    }
+  };
+
   // Helper: Format file bytes size to readable KB/MB
   const formatBytes = (bytes) => {
     if (bytes === 0) return '0 Bytes';
@@ -209,6 +288,8 @@ function App() {
     setToken('');
     setUser(null);
     setDocuments([]);
+    setSignatures([]);
+    setActiveDocumentId('');
     setSuccessMessage('');
     setErrorMessage('');
     setUploadError('');
@@ -496,11 +577,13 @@ function App() {
                               type="button"
                               onClick={() => {
                                 setPreviewFileUrl(`http://localhost:5000/uploads/${doc.filePath}`);
+                                setActiveDocumentId(doc._id);
+                                fetchSignatures(doc._id, token);
                                 setPageNumber(1);
                               }}
                               className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 rounded-lg text-[10px] font-bold transition cursor-pointer"
                             >
-                              Preview PDF
+                              Open Editor
                             </button>
                           </td>
                         </tr>
@@ -513,40 +596,106 @@ function App() {
 
           </main>
 
-          {/* PDF Preview Modal */}
+          {/* PDF Drag & Drop Editor Modal */}
           {previewFileUrl && (
             <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 overflow-y-auto">
-              <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-2xl flex flex-col shadow-xl my-8">
+              <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-4xl flex flex-col shadow-xl my-8">
                 
                 {/* Modal Header */}
                 <div className="border-b border-slate-100 px-6 py-4 flex items-center justify-between">
-                  <h3 className="text-sm font-bold text-slate-800">Document Preview</h3>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-800">PDF Document Editor</h3>
+                    <p className="text-[10px] text-slate-400 mt-0.5">Drag fields from the sidebar and drop them on the document pages.</p>
+                  </div>
                   <button 
-                    onClick={() => setPreviewFileUrl('')}
+                    onClick={() => { setPreviewFileUrl(''); setActiveDocumentId(''); setSignatures([]); }}
                     className="text-slate-400 hover:text-slate-600 font-bold text-lg px-2 cursor-pointer"
                   >
                     &times;
                   </button>
                 </div>
 
-                {/* PDF Renderer Body */}
-                <div className="p-6 flex flex-col items-center justify-center bg-slate-100/60 overflow-x-auto min-h-[400px]">
-                  <PDFDocument
-                    file={previewFileUrl}
-                    onLoadSuccess={onDocumentLoadSuccess}
-                    loading={<div className="text-xs text-slate-500 font-medium">Loading document...</div>}
-                    error={<div className="text-xs text-rose-500 font-medium">Failed to load PDF preview.</div>}
-                  >
-                    <PDFPage 
-                      pageNumber={pageNumber} 
-                      renderTextLayer={false} 
-                      renderAnnotationLayer={false}
-                      className="border border-slate-200 shadow-md max-w-full"
-                    />
-                  </PDFDocument>
+                {/* Editor Content Area (Split View) */}
+                <div className="flex flex-1 min-h-[450px]">
+                  
+                  {/* Left Column: Draggable Fields Palette */}
+                  <div className="w-56 bg-slate-50 border-r border-slate-200 p-4 flex flex-col gap-4">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Signature Tools</span>
+                    
+                    {/* Draggable Template Block */}
+                    <div
+                      draggable="true"
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('text/plain', 'new-signature');
+                      }}
+                      className="border border-dashed border-teal-400 bg-teal-50/50 hover:bg-teal-50 text-teal-700 p-4 rounded-xl flex flex-col items-center justify-center text-center cursor-grab active:cursor-grabbing shadow-sm transition duration-150 select-none group"
+                    >
+                      <svg className="w-6 h-6 mb-2 text-teal-600 group-hover:scale-105 transition" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                      </svg>
+                      <span className="text-xs font-bold">Signature Box</span>
+                      <span className="text-[9px] text-slate-400 mt-1">Drag and drop on page</span>
+                    </div>
+
+                    <div className="mt-auto text-[9px] text-slate-400 bg-white border border-slate-200/60 p-3 rounded-lg leading-relaxed">
+                      💡 **Tip**: Drop a box on the PDF. You can drag placed boxes to reposition them anywhere on the page.
+                    </div>
+                  </div>
+
+                  {/* Right Column: PDF Viewer Drop Target */}
+                  <div className="flex-1 p-6 flex flex-col items-center justify-center bg-slate-100/30 overflow-x-auto">
+                    
+                    {/* Bounding box wrapper holding both canvas and absolute overlay elements */}
+                    <div 
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={handlePageDrop}
+                      className="relative border border-slate-300 shadow-md select-none"
+                    >
+                      <PDFDocument
+                        file={previewFileUrl}
+                        onLoadSuccess={onDocumentLoadSuccess}
+                        loading={<div className="text-xs text-slate-500 font-medium">Loading document...</div>}
+                        error={<div className="text-xs text-rose-500 font-medium">Failed to load PDF preview.</div>}
+                      >
+                        <PDFPage 
+                          pageNumber={pageNumber} 
+                          renderTextLayer={false} 
+                          renderAnnotationLayer={false}
+                          className="max-w-full"
+                        />
+                      </PDFDocument>
+
+                      {/* Render absolute overlays of signature positions */}
+                      {signatures
+                        .filter(sig => sig.page === pageNumber)
+                        .map((sig, idx) => (
+                          <div
+                            key={sig._id || idx}
+                            draggable="true"
+                            onDragStart={(e) => {
+                              // Store the ID of the box we are moving
+                              e.dataTransfer.setData('text/plain', `move-signature-${sig._id}`);
+                            }}
+                            style={{
+                              left: `${sig.x}%`,
+                              top: `${sig.y}%`,
+                              transform: 'translate(-50%, -50%)' // Centers the box on cursor drop coordinates
+                            }}
+                            className="absolute bg-teal-500/20 border border-teal-500 text-teal-700 text-[9px] font-bold px-2.5 py-1 rounded shadow-md cursor-move select-none whitespace-nowrap hover:bg-teal-500/30 transition duration-150 flex items-center gap-1.5"
+                          >
+                            <svg className="w-3 h-3 text-teal-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                            </svg>
+                            Sign Here
+                          </div>
+                        ))}
+                    </div>
+
+                  </div>
+
                 </div>
 
-                {/* Modal Footer Controls */}
+                {/* Modal Footer Page Controls */}
                 <div className="border-t border-slate-100 px-6 py-4 flex items-center justify-between">
                   <div className="text-xs text-slate-500 font-medium">
                     Page {pageNumber} of {numPages || '?'}

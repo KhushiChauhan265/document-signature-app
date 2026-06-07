@@ -3,6 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const authRoutes = require('./routes/auth');
 const docRoutes = require('./routes/docs');
+const signatureRoutes = require('./routes/signatures');
 
 const app = express();
 
@@ -14,12 +15,12 @@ app.use(cors());
 app.use(express.json());
 
 // Serve the uploads folder as static files
-// This allows the frontend to request and load PDF files for previewing
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Mount routers
 app.use('/api/auth', authRoutes);
 app.use('/api/docs', docRoutes);
+app.use('/api/signatures', signatureRoutes);
 
 // Basic health check route to verify the server is running properly
 app.get('/api/health', (req, res) => {
