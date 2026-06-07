@@ -1,0 +1,302 @@
+{
+  "info": {
+    "_postman_id": "8c4856f4-b258-450f-a3d2-c2e7428bf16f",
+    "name": "Document Signature App APIs",
+    "description": "API collection for testing all endpoints up to Day 6: Authentication, Document Uploads, and Signature Placements.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Authentication",
+      "item": [
+        {
+          "name": "Register User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Alice Tester\",\n  \"email\": \"alice.tester@example.com\",\n  \"password\": \"password123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "register"]
+            },
+            "description": "Registers a new user and returns user info + JWT token."
+          }
+        },
+        {
+          "name": "Login User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"alice.tester@example.com\",\n  \"password\": \"password123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "login"]
+            },
+            "description": "Logs in an existing user and returns their JWT token."
+          }
+        },
+        {
+          "name": "Get User Profile (Protected)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{jwt_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "me"]
+            },
+            "description": "Gets details of the logged-in user. Requires JWT Bearer Token."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Documents",
+      "item": [
+        {
+          "name": "Upload PDF (Protected)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{jwt_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "pdf",
+                  "description": "The PDF file to upload (select file type in Postman)",
+                  "type": "file",
+                  "src": ""
+                },
+                {
+                  "key": "signerType",
+                  "value": "only-you",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/docs/upload",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "docs", "upload"]
+            },
+            "description": "Uploads a PDF file using Multer. Requires JWT Bearer Token."
+          }
+        },
+        {
+          "name": "List User Documents (Protected)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{jwt_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/docs",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "docs"]
+            },
+            "description": "Lists all documents uploaded by the logged-in user. Requires JWT Bearer Token."
+          }
+        },
+        {
+          "name": "Get Specific Document (Protected)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{jwt_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/docs/{{activeDocumentId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "docs", "{{activeDocumentId}}"]
+            },
+            "description": "Gets the metadata for a single document. Requires JWT Bearer Token."
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Signatures",
+      "item": [
+        {
+          "name": "Save Signature Placement (Protected)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{jwt_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"documentId\": \"{{activeDocumentId}}\",\n  \"x\": 45.5,\n  \"y\": 62.3,\n  \"page\": 1\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/signatures",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "signatures"]
+            },
+            "description": "Saves a signature coordinate relative to a document page. Requires JWT Bearer Token."
+          }
+        },
+        {
+          "name": "Get Document Signatures (Protected)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{jwt_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/signatures/{{activeDocumentId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "signatures", "{{activeDocumentId}}"]
+            },
+            "description": "Gets all saved signature positions for a document. Requires JWT Bearer Token."
+          }
+        },
+        {
+          "name": "Update Signature Placement (Protected)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{jwt_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"x\": 50.0,\n  \"y\": 70.0,\n  \"page\": 1\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/signatures/{{activeSignatureId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "signatures", "{{activeSignatureId}}"]
+            },
+            "description": "Updates signature coordinates after repositioning. Requires JWT Bearer Token."
+          }
+        }
+      ]
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [""]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [""]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5000",
+      "type": "string"
+    },
+    {
+      "key": "jwt_token",
+      "value": "your_jwt_token_here",
+      "type": "string"
+    },
+    {
+      "key": "activeDocumentId",
+      "value": "your_document_id_here",
+      "type": "string"
+    },
+    {
+      "key": "activeSignatureId",
+      "value": "your_signature_id_here",
+      "type": "string"
+    }
+  ]
+}

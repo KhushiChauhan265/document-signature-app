@@ -113,6 +113,11 @@ router.get('/', protect, async (req, res) => {
  * @access  Protected (Requires Token)
  */
 router.get('/:id', protect, async (req, res) => {
+  const mongoose = require('mongoose');
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return res.status(400).json({ message: 'Invalid document ID format' });
+  }
+
   try {
     const document = await Document.findById(req.params.id);
 

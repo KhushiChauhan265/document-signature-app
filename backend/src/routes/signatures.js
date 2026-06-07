@@ -19,6 +19,11 @@ router.post('/', protect, async (req, res) => {
       return res.status(400).json({ message: 'Please provide documentId, x, and y coordinates' });
     }
 
+    const mongoose = require('mongoose');
+    if (!mongoose.Types.ObjectId.isValid(documentId)) {
+      return res.status(400).json({ message: 'Invalid document ID format' });
+    }
+
     // 2. Fetch document to check if it exists
     const document = await Document.findById(documentId);
     if (!document) {
@@ -58,6 +63,11 @@ router.get('/:documentId', protect, async (req, res) => {
   try {
     const { documentId } = req.params;
 
+    const mongoose = require('mongoose');
+    if (!mongoose.Types.ObjectId.isValid(documentId)) {
+      return res.status(400).json({ message: 'Invalid document ID format' });
+    }
+
     // 1. Check if document exists
     const document = await Document.findById(documentId);
     if (!document) {
@@ -86,6 +96,11 @@ router.get('/:documentId', protect, async (req, res) => {
 router.put('/:id', protect, async (req, res) => {
   try {
     const { x, y, page } = req.body;
+
+    const mongoose = require('mongoose');
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid signature ID format' });
+    }
 
     // 1. Find the signature position entry
     const signature = await Signature.findById(req.params.id);
