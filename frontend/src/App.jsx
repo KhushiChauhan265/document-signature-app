@@ -41,6 +41,9 @@ function App() {
   const [pageNumber, setPageNumber] = useState(1);
   const [signatures, setSignatures] = useState([]);
 
+  const currentDoc = documents.find(d => d._id === activeDocumentId);
+  const isSigned = currentDoc?.status === 'signed';
+
   // Auto-login if token exists in localStorage on mount
   useEffect(() => {
     if (token) {
@@ -91,6 +94,83 @@ function App() {
       setSignatures(response.data);
     } catch (error) {
       console.error('Error fetching signatures:', error.message);
+    }
+  };
+
+  // Download finalized signed PDF securely
+  const handleDownloadSigned = async (docId, fileName) => {
+    try {
+      const response = await axios.get(`http://localhost:5000/api/docs/${docId}/download-signed`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        },
+        responseType: 'blob'
+      });
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      const signedName = fileName.replace('.pdf', '') + '_signed.pdf';
+      link.setAttribute('download', signedName);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (error) {
+      console.error('Download failed:', error);
+      alert('Failed to download signed PDF.');
+    }
+  };
+
+  // Finalize document (render signature boxes using PDF-Lib on backend)
+  const handleFinalizeDocument = async () => {
+    if (!activeDocumentId) return;
+    try {
+      const response = await axios.post(`http://localhost:5000/api/docs/${activeDocumentId}/finalize`, {}, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+      
+      // Refresh documents list
+      await fetchDocuments(token);
+      
+      // Load the finalized signed PDF in preview
+      const downloadResponse = await axios.get(`http://localhost:5000/api/docs/${activeDocumentId}/download-signed`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        },
+        responseType: 'blob'
+      });
+      
+      const blobUrl = URL.createObjectURL(new Blob([downloadResponse.data]));
+      setPreviewFileUrl(blobUrl);
+      setSignatures([]); // Clear coordinates overlay since signature is now baked into the PDF
+      alert(response.data.message || 'Document finalized and signed successfully!');
+    } catch (error) {
+      console.error('Finalize failed:', error);
+      const msg = error.response && error.response.data && error.response.data.message
+        ? error.response.data.message
+        : 'Failed to finalize document. Make sure you placed at least one signature box.';
+      alert(msg);
+    }
+  };
+
+  // View finalized signed PDF in the preview modal
+  const handleViewSignedDocument = async (doc) => {
+    try {
+      const response = await axios.get(`http://localhost:5000/api/docs/${doc._id}/download-signed`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        },
+        responseType: 'blob'
+      });
+      const blobUrl = URL.createObjectURL(new Blob([response.data]));
+      setPreviewFileUrl(blobUrl);
+      setActiveDocumentId(doc._id);
+      setSignatures([]); // No overlays for finalized documents since it's already embedded in the PDF
+      setPageNumber(1);
+    } catch (error) {
+      console.error('Failed to load signed document preview:', error);
+      alert('Failed to load signed document preview.');
     }
   };
 
@@ -213,7 +293,7 @@ function App() {
   // HTML5 Drag Drop Handler: Drop element onto PDF page canvas
   const handlePageDrop = async (e) => {
     e.preventDefault();
-    if (!activeDocumentId) return;
+    if (!activeDocumentId || isSigned) return;
 
     // Get the page bounding box
     const rect = e.currentTarget.getBoundingClientRect();
@@ -571,20 +651,48 @@ function App() {
                             <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-slate-100 text-slate-600 border border-slate-200">
                               {doc.signerType === 'only-you' ? 'Only You' : 'Many People'}
                             </span>
+                            {doc.status === 'signed' ? (
+                              <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 ml-1.5">
+                                Signed
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-amber-50 text-amber-700 border border-amber-200 ml-1.5">
+                                Pending
+                              </span>
+                            )}
                           </td>
                           <td className="py-3.5 px-2 text-right">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setPreviewFileUrl(`http://localhost:5000/uploads/${doc.filePath}`);
-                                setActiveDocumentId(doc._id);
-                                fetchSignatures(doc._id, token);
-                                setPageNumber(1);
-                              }}
-                              className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 rounded-lg text-[10px] font-bold transition cursor-pointer"
-                            >
-                              Open Editor
-                            </button>
+                            {doc.status === 'signed' ? (
+                              <div className="flex gap-2 justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() => handleViewSignedDocument(doc)}
+                                  className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 rounded-lg text-[10px] font-bold transition cursor-pointer"
+                                >
+                                  View Document
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDownloadSigned(doc._id, doc.fileName)}
+                                  className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-[10px] font-bold transition cursor-pointer"
+                                >
+                                  Download Signed
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPreviewFileUrl(`http://localhost:5000/uploads/${doc.filePath}`);
+                                  setActiveDocumentId(doc._id);
+                                  fetchSignatures(doc._id, token);
+                                  setPageNumber(1);
+                                }}
+                                className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 rounded-lg text-[10px] font-bold transition cursor-pointer"
+                              >
+                                Open Editor
+                              </button>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -604,14 +712,18 @@ function App() {
                 {/* Modal Header */}
                 <div className="border-b border-slate-100 px-6 py-4 flex items-center justify-between">
                   <div>
-                    <h3 className="text-sm font-bold text-slate-800">PDF Document Editor</h3>
-                    <p className="text-[10px] text-slate-400 mt-0.5">Drag fields from the sidebar and drop them on the document pages.</p>
+                    <h3 className="text-sm font-bold text-slate-800">
+                      {isSigned ? 'PDF Document Viewer (Signed)' : 'PDF Document Editor'}
+                    </h3>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      {isSigned ? 'Viewing finalized signed PDF document.' : 'Drag fields from the sidebar and drop them on the document pages.'}
+                    </p>
                   </div>
                   <button 
                     onClick={() => { setPreviewFileUrl(''); setActiveDocumentId(''); setSignatures([]); }}
-                    className="text-slate-400 hover:text-slate-600 font-bold text-lg px-2 cursor-pointer"
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5"
                   >
-                    &times;
+                    Close Editor
                   </button>
                 </div>
 
@@ -622,24 +734,43 @@ function App() {
                   <div className="w-56 bg-slate-50 border-r border-slate-200 p-4 flex flex-col gap-4">
                     <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Signature Tools</span>
                     
-                    {/* Draggable Template Block */}
-                    <div
-                      draggable="true"
-                      onDragStart={(e) => {
-                        e.dataTransfer.setData('text/plain', 'new-signature');
-                      }}
-                      className="border border-dashed border-teal-400 bg-teal-50/50 hover:bg-teal-50 text-teal-700 p-4 rounded-xl flex flex-col items-center justify-center text-center cursor-grab active:cursor-grabbing shadow-sm transition duration-150 select-none group"
-                    >
-                      <svg className="w-6 h-6 mb-2 text-teal-600 group-hover:scale-105 transition" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                      </svg>
-                      <span className="text-xs font-bold">Signature Box</span>
-                      <span className="text-[9px] text-slate-400 mt-1">Drag and drop on page</span>
-                    </div>
+                    {isSigned ? (
+                      <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-4 text-emerald-800 text-xs font-medium flex flex-col gap-2">
+                        <div className="font-bold text-emerald-900 flex items-center gap-1.5">
+                          ✓ Document Signed
+                        </div>
+                        <p className="leading-relaxed text-[11px] text-emerald-700">
+                          This document has been finalized and signed. No more signature fields can be placed.
+                        </p>
+                        <button
+                          onClick={() => handleDownloadSigned(activeDocumentId, currentDoc?.fileName || 'document.pdf')}
+                          className="mt-2 w-full py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-[10px] transition cursor-pointer text-center"
+                        >
+                          Download Signed PDF
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        {/* Draggable Template Block */}
+                        <div
+                          draggable="true"
+                          onDragStart={(e) => {
+                            e.dataTransfer.setData('text/plain', 'new-signature');
+                          }}
+                          className="border border-dashed border-teal-400 bg-teal-50/50 hover:bg-teal-50 text-teal-700 p-4 rounded-xl flex flex-col items-center justify-center text-center cursor-grab active:cursor-grabbing shadow-sm transition duration-150 select-none group"
+                        >
+                          <svg className="w-6 h-6 mb-2 text-teal-600 group-hover:scale-105 transition" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                          </svg>
+                          <span className="text-xs font-bold">Signature Box</span>
+                          <span className="text-[9px] text-slate-400 mt-1">Drag and drop on page</span>
+                        </div>
 
-                    <div className="mt-auto text-[9px] text-slate-400 bg-white border border-slate-200/60 p-3 rounded-lg leading-relaxed">
-                      💡 **Tip**: Drop a box on the PDF. You can drag placed boxes to reposition them anywhere on the page.
-                    </div>
+                        <div className="mt-auto text-[9px] text-slate-400 bg-white border border-slate-200/60 p-3 rounded-lg leading-relaxed">
+                          💡 **Tip**: Drop a box on the PDF. You can drag placed boxes to reposition them anywhere on the page.
+                        </div>
+                      </>
+                    )}
                   </div>
 
                   {/* Right Column: PDF Viewer Drop Target */}
@@ -666,7 +797,7 @@ function App() {
                       </PDFDocument>
 
                       {/* Render absolute overlays of signature positions */}
-                      {signatures
+                      {!isSigned && signatures
                         .filter(sig => sig.page === pageNumber)
                         .map((sig, idx) => (
                           <div
@@ -697,8 +828,19 @@ function App() {
 
                 {/* Modal Footer Page Controls */}
                 <div className="border-t border-slate-100 px-6 py-4 flex items-center justify-between">
-                  <div className="text-xs text-slate-500 font-medium">
-                    Page {pageNumber} of {numPages || '?'}
+                  <div className="flex items-center gap-3">
+                    <div className="text-xs text-slate-500 font-medium">
+                      Page {pageNumber} of {numPages || '?'}
+                    </div>
+                    {!isSigned && (
+                      <button
+                        type="button"
+                        onClick={handleFinalizeDocument}
+                        className="px-4 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition cursor-pointer shadow-sm"
+                      >
+                        Generate Signed PDF
+                      </button>
+                    )}
                   </div>
                   
                   <div className="flex gap-2">

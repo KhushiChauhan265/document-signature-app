@@ -29,6 +29,9 @@ const DocumentSchema = new mongoose.Schema({
     enum: ['pending', 'signed', 'rejected'],
     default: 'pending', // Keeps track of document signature lifecycle
   },
+  signedFilePath: {
+    type: String, // Tracks the generated signed PDF filename on disk
+  },
 }, {
   // Automatically adds 'createdAt' and 'updatedAt' timestamps
   timestamps: true

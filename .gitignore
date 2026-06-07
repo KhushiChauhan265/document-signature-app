@@ -28,3 +28,7 @@ Thumbs.db
 # Ignore actual uploaded files, but keep the directory template
 backend/uploads/*
 !backend/uploads/.gitkeep
+
+# Ignore actual generated signed PDFs
+backend/signed-pdfs/*
+!backend/signed-pdfs/.gitkeep
