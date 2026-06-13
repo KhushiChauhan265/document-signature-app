@@ -4,6 +4,7 @@ const path = require('path');
 const authRoutes = require('./routes/auth');
 const docRoutes = require('./routes/docs');
 const signatureRoutes = require('./routes/signatures');
+const auditRoutes = require('./routes/audit');
 
 const app = express();
 
@@ -21,6 +22,7 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 app.use('/api/auth', authRoutes);
 app.use('/api/docs', docRoutes);
 app.use('/api/signatures', signatureRoutes);
+app.use('/api/audit', auditRoutes);
 
 // Basic health check route to verify the server is running properly
 app.get('/api/health', (req, res) => {

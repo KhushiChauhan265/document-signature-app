@@ -5,6 +5,7 @@ const fs = require('fs');
 const Document = require('../models/Document');
 const Signature = require('../models/Signature');
 const { protect } = require('../middleware/auth');
+const { logAudit } = require('../middleware/auditLogger');
 
 const router = express.Router();
 
@@ -261,6 +262,16 @@ router.post('/:id/finalize', protect, async (req, res) => {
     // Update all signatures status to 'signed'
     await Signature.updateMany({ documentId: document._id }, { status: 'signed' });
 
+    await logAudit({
+      fileId: document._id,
+      action: 'document_signed',
+      userId: req.user._id,
+      signerName: req.user.name,
+      signerEmail: req.user.email,
+      req,
+      metadata: { type: 'owner_finalize' }
+    });
+
     return res.json({
       message: 'Document finalized and signed successfully',
       document
@@ -453,6 +464,17 @@ router.post('/:id/share', protect, async (req, res) => {
 
         failed.push({ email, error: errorMsg, link });
       }
+
+      // Log audit event for this invitation
+      const wasEmailed = sent.some(s => s.email === email);
+      await logAudit({
+        fileId: document._id,
+        action: 'invite_email_sent',
+        userId: req.user._id,
+        signerEmail: email,
+        req,
+        metadata: { link, emailed: wasEmailed }
+      });
     }
 
     await document.save();
@@ -515,6 +537,13 @@ router.get('/public/verify/:token', async (req, res) => {
     // Fetch coordinates
     const signatures = await Signature.find({ documentId: document._id });
 
+    await logAudit({
+      fileId: document._id,
+      action: 'signature_link_opened',
+      signerEmail: signer.email,
+      req
+    });
+
     return res.json({
       document: {
         _id: document._id,
@@ -560,6 +589,14 @@ router.get('/public/view/:token', async (req, res) => {
     }
 
     res.setHeader('Content-Type', 'application/pdf');
+
+    await logAudit({
+      fileId: document._id,
+      action: 'document_viewed',
+      signerEmail: signer.email,
+      req
+    });
+
     return res.sendFile(filePath);
 
   } catch (error) {
@@ -701,6 +738,15 @@ router.post('/public/sign/:token', async (req, res) => {
     }
 
     await document.save();
+
+    await logAudit({
+      fileId: document._id,
+      action: 'document_signed',
+      signerEmail: signer.email,
+      signerName: signerName.trim(),
+      req,
+      metadata: { finalized: allSigned }
+    });
 
     return res.json({
       message: allSigned ? 'Document signed and finalized successfully' : 'Your signature has been saved successfully. Waiting for other signers.',
