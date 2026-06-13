@@ -29,6 +29,9 @@ const DocumentSchema = new mongoose.Schema({
     enum: ['pending', 'signed', 'rejected'],
     default: 'pending', // Keeps track of document signature lifecycle
   },
+  rejectReason: {
+    type: String,
+  },
   signedFilePath: {
     type: String, // Tracks the generated signed PDF filename on disk
   },
@@ -37,8 +40,9 @@ const DocumentSchema = new mongoose.Schema({
     name: { type: String }, // Filled when signing
     signingToken: { type: String },
     signingTokenExpires: { type: Date },
-    status: { type: String, enum: ['pending', 'signed'], default: 'pending' },
-    signedAt: { type: Date }
+    status: { type: String, enum: ['pending', 'signed', 'rejected'], default: 'pending' },
+    signedAt: { type: Date },
+    rejectReason: { type: String }
   }],
 }, {
   // Automatically adds 'createdAt' and 'updatedAt' timestamps

@@ -529,9 +529,17 @@ router.get('/public/verify/:token', async (req, res) => {
       return res.status(400).json({ message: 'Signing link has expired' });
     }
 
-    // Check if this signer already signed
+    // Check if document or signer is already rejected
+    if (document.status === 'rejected') {
+      return res.status(400).json({ message: 'This document has been rejected' });
+    }
+
+    // Check if this signer already signed or rejected
     if (signer.status === 'signed') {
       return res.status(400).json({ message: 'You have already completed signing for this document' });
+    }
+    if (signer.status === 'rejected') {
+      return res.status(400).json({ message: 'You have rejected this document' });
     }
 
     // Fetch coordinates
@@ -606,6 +614,78 @@ router.get('/public/view/:token', async (req, res) => {
 });
 
 /**
+ * @route   POST /api/docs/public/reject/:token
+ * @desc    Reject a document signature request with a reason
+ * @access  Public
+ */
+router.post('/public/reject/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+    const { rejectReason } = req.body;
+
+    if (!rejectReason || !rejectReason.trim()) {
+      return res.status(400).json({ message: 'Please provide a reason to reject the document' });
+    }
+
+    const document = await Document.findOne({ 'signers.signingToken': token });
+    if (!document) {
+      return res.status(404).json({ message: 'Invalid or expired signing link' });
+    }
+
+    const signer = document.signers.find(s => s.signingToken === token);
+    if (!signer) {
+      return res.status(404).json({ message: 'Invalid or expired signing link' });
+    }
+
+    if (signer.signingTokenExpires && signer.signingTokenExpires < Date.now()) {
+      return res.status(400).json({ message: 'Signing link has expired' });
+    }
+
+    if (document.status === 'rejected') {
+      return res.status(400).json({ message: 'This document has already been rejected' });
+    }
+
+    if (signer.status === 'signed') {
+      return res.status(400).json({ message: 'You have already signed this document and cannot reject it' });
+    }
+
+    if (signer.status === 'rejected') {
+      return res.status(400).json({ message: 'You have already rejected this document' });
+    }
+
+    // Update signer status and invalidate token
+    signer.status = 'rejected';
+    signer.rejectReason = rejectReason.trim();
+    signer.signingToken = null;
+    signer.signingTokenExpires = null;
+
+    // Update overall document status to rejected
+    document.status = 'rejected';
+    document.rejectReason = rejectReason.trim();
+
+    await document.save();
+
+    // Log audit event for this rejection
+    await logAudit({
+      fileId: document._id,
+      action: 'document_rejected',
+      signerEmail: signer.email,
+      req,
+      metadata: { rejectReason: rejectReason.trim() }
+    });
+
+    return res.json({
+      message: 'Document rejected successfully',
+      document
+    });
+
+  } catch (error) {
+    console.error('Error rejecting document:', error.message);
+    return res.status(500).json({ message: 'Server error processing document rejection' });
+  }
+});
+
+/**
  * @route   POST /api/docs/public/sign/:token
  * @desc    Submit signature publicly. Compiles final PDF only when all signers complete.
  * @access  Public
@@ -633,8 +713,16 @@ router.post('/public/sign/:token', async (req, res) => {
       return res.status(400).json({ message: 'Signing link has expired' });
     }
 
+    if (document.status === 'rejected') {
+      return res.status(400).json({ message: 'This document has been rejected and cannot be signed' });
+    }
+
     if (signer.status === 'signed') {
       return res.status(400).json({ message: 'You have already signed this document' });
+    }
+
+    if (signer.status === 'rejected') {
+      return res.status(400).json({ message: 'You have rejected this document' });
     }
 
     // Save signature info for this signer and invalidate token

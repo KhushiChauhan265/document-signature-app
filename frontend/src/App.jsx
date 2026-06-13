@@ -51,6 +51,9 @@ function App() {
   const [signerName, setSignerName] = useState('');
   const [isSigningPublic, setIsSigningPublic] = useState(false);
   const [publicSignError, setPublicSignError] = useState('');
+  const [rejectReason, setRejectReason] = useState('');
+  const [isRejectingPublic, setIsRejectingPublic] = useState(false);
+  const [showRejectForm, setShowRejectForm] = useState(false);
   
   // Dashboard Share Modal States
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
@@ -113,6 +116,29 @@ function App() {
       alert(msg);
     } finally {
       setIsSigningPublic(false);
+    }
+  };
+
+  // Submit external signer rejection with a reason
+  const handlePublicReject = async (e) => {
+    e.preventDefault();
+    if (!rejectReason.trim()) {
+      alert('Please enter a reason for rejecting the document.');
+      return;
+    }
+
+    setIsRejectingPublic(true);
+    try {
+      await axios.post(`http://localhost:5000/api/docs/public/reject/${publicToken}`, {
+        rejectReason
+      });
+      setView('public-rejected');
+    } catch (error) {
+      console.error('Public rejection failed:', error);
+      const msg = error.response?.data?.message || 'Failed to reject document.';
+      alert(msg);
+    } finally {
+      setIsRejectingPublic(false);
     }
   };
 
@@ -761,6 +787,10 @@ function App() {
                               <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 ml-1.5">
                                 Signed
                               </span>
+                            ) : doc.status === 'rejected' ? (
+                              <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-rose-50 text-rose-700 border border-rose-200 ml-1.5">
+                                Rejected
+                              </span>
                             ) : (
                               <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-amber-50 text-amber-700 border border-amber-200 ml-1.5">
                                 Pending
@@ -784,6 +814,10 @@ function App() {
                                 >
                                   Download Signed
                                 </button>
+                              </div>
+                            ) : doc.status === 'rejected' ? (
+                              <div className="text-[10px] text-rose-600 font-semibold italic max-w-[200px] truncate ml-auto" title={doc.rejectReason}>
+                                Reason: {doc.rejectReason || 'No reason specified'}
                               </div>
                             ) : (
                               <div className="flex gap-2 justify-end">
@@ -1183,9 +1217,14 @@ function App() {
             <div className="w-full md:w-80 flex flex-col gap-4 shrink-0">
               <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col gap-4">
                 <div>
-                  <h3 className="text-sm font-bold text-slate-800">Complete Your Signature</h3>
+                  <h3 className="text-sm font-bold text-slate-800">
+                    {showRejectForm ? 'Reject Document' : 'Complete Your Signature'}
+                  </h3>
                   <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
-                    You have been invited to sign this document. Review the PDF and enter your full name below to sign.
+                    {showRejectForm 
+                      ? 'Please provide a brief reason for rejecting this document signature request.'
+                      : 'You have been invited to sign this document. Review the PDF and enter your full name below to sign.'
+                    }
                   </p>
                 </div>
 
@@ -1194,27 +1233,70 @@ function App() {
                   <div><strong>Your Email:</strong> {publicDoc.signerEmail}</div>
                 </div>
 
-                <form onSubmit={handlePublicSign} className="flex flex-col gap-3.5 border-t border-slate-100 pt-3">
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-xs font-semibold text-slate-600">Your Full Name</label>
-                    <input 
-                      type="text" 
-                      value={signerName}
-                      onChange={(e) => setSignerName(e.target.value)}
-                      placeholder="Type your name to sign" 
-                      required
-                      className="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-xs focus:outline-none focus:border-teal-500 bg-slate-50/50"
-                    />
-                  </div>
+                {!showRejectForm ? (
+                  <form onSubmit={handlePublicSign} className="flex flex-col gap-3.5 border-t border-slate-100 pt-3">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-semibold text-slate-600">Your Full Name</label>
+                      <input 
+                        type="text" 
+                        value={signerName}
+                        onChange={(e) => setSignerName(e.target.value)}
+                        placeholder="Type your name to sign" 
+                        required
+                        className="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-xs focus:outline-none focus:border-teal-500 bg-slate-50/50"
+                      />
+                    </div>
 
-                  <button 
-                    type="submit" 
-                    disabled={isSigningPublic}
-                    className="w-full bg-teal-600 hover:bg-teal-700 disabled:bg-slate-300 text-white rounded-xl py-2.5 font-bold text-xs transition cursor-pointer shadow-sm"
-                  >
-                    {isSigningPublic ? 'Signing Document...' : 'Sign & Complete'}
-                  </button>
-                </form>
+                    <button 
+                      type="submit" 
+                      disabled={isSigningPublic}
+                      className="w-full bg-teal-600 hover:bg-teal-700 disabled:bg-slate-300 text-white rounded-xl py-2.5 font-bold text-xs transition cursor-pointer shadow-sm"
+                    >
+                      {isSigningPublic ? 'Signing Document...' : 'Sign & Complete'}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowRejectForm(true)}
+                      className="w-full border border-slate-200 hover:border-rose-200 hover:bg-rose-50/35 text-slate-500 hover:text-rose-600 rounded-xl py-2 font-semibold text-[11px] transition cursor-pointer"
+                    >
+                      Reject Document
+                    </button>
+                  </form>
+                ) : (
+                  <form onSubmit={handlePublicReject} className="flex flex-col gap-3.5 border-t border-slate-100 pt-3">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-semibold text-slate-600">Rejection Reason</label>
+                      <textarea
+                        value={rejectReason}
+                        onChange={(e) => setRejectReason(e.target.value)}
+                        placeholder="Why are you rejecting this document?" 
+                        required
+                        rows={3}
+                        className="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-xs focus:outline-none focus:border-rose-500 bg-slate-50/50 resize-none"
+                      />
+                    </div>
+
+                    <button 
+                      type="submit" 
+                      disabled={isRejectingPublic}
+                      className="w-full bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 text-white rounded-xl py-2.5 font-bold text-xs transition cursor-pointer shadow-sm"
+                    >
+                      {isRejectingPublic ? 'Rejecting Document...' : 'Confirm Rejection'}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowRejectForm(false);
+                        setRejectReason('');
+                      }}
+                      className="w-full border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl py-2 font-semibold text-[11px] transition cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                  </form>
+                )}
               </div>
 
               <div className="text-[10px] text-slate-400 leading-relaxed bg-white border border-slate-200/60 p-4 rounded-xl">
@@ -1311,6 +1393,24 @@ function App() {
             <p className="text-xs text-slate-500 leading-relaxed">
               Thank you! The document has been finalized and compiled with your signature successfully. 
               The document owner has been notified.
+            </p>
+            <div className="text-[10px] text-slate-400 italic mt-2">
+              You can close this tab now.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* View: PUBLIC SIGNING REJECTED */}
+      {view === 'public-rejected' && (
+        <div className="flex-1 flex items-center justify-center p-6 bg-slate-50">
+          <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl p-8 shadow-sm text-center flex flex-col items-center gap-4">
+            <div className="w-12 h-12 bg-rose-50 border border-rose-100 rounded-full flex items-center justify-center text-rose-600 text-lg font-bold shadow-sm">
+              ✕
+            </div>
+            <h2 className="text-lg font-bold text-slate-900">Document Rejected</h2>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              You have rejected this document signature request. The document status has been updated to rejected, and the owner has been notified.
             </p>
             <div className="text-[10px] text-slate-400 italic mt-2">
               You can close this tab now.
