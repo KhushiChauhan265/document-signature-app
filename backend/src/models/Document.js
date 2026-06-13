@@ -32,6 +32,16 @@ const DocumentSchema = new mongoose.Schema({
   rejectReason: {
     type: String,
   },
+  ownerSignatureMode: {
+    type: String,
+    enum: ['typed', 'handwritten', 'drawn']
+  },
+  ownerSignatureFont: {
+    type: String
+  },
+  ownerSignatureData: {
+    type: String
+  },
   signedFilePath: {
     type: String, // Tracks the generated signed PDF filename on disk
   },
@@ -42,7 +52,17 @@ const DocumentSchema = new mongoose.Schema({
     signingTokenExpires: { type: Date },
     status: { type: String, enum: ['pending', 'signed', 'rejected'], default: 'pending' },
     signedAt: { type: Date },
-    rejectReason: { type: String }
+    rejectReason: { type: String },
+    signatureMode: {
+      type: String,
+      enum: ['typed', 'handwritten', 'drawn']
+    },
+    signatureFont: {
+      type: String
+    },
+    signatureData: {
+      type: String
+    }
   }],
 }, {
   // Automatically adds 'createdAt' and 'updatedAt' timestamps

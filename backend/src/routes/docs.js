@@ -176,6 +176,8 @@ router.post('/:id/finalize', protect, async (req, res) => {
       return res.status(400).json({ message: 'Please place at least one signature box before finalizing.' });
     }
 
+    const { signatureMode, signatureFont, signatureData } = req.body;
+
     // Get path of original uploaded PDF
     const originalPath = path.join(UPLOAD_DIR, document.filePath);
     if (!fs.existsSync(originalPath)) {
@@ -193,6 +195,18 @@ router.post('/:id/finalize', protect, async (req, res) => {
     // Embed HelveticaBold font for signature rendering
     const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
+    const isImageSig = (signatureMode === 'drawn' || signatureMode === 'handwritten') && signatureData;
+    let pngImage;
+    if (isImageSig) {
+      try {
+        const base64Data = signatureData.replace(/^data:image\/png;base64,/, "");
+        const imageBuffer = Buffer.from(base64Data, 'base64');
+        pngImage = await pdfDoc.embedPng(imageBuffer);
+      } catch (err) {
+        console.error('Failed to embed signature image:', err.message);
+      }
+    }
+
     // Embed each signature into the PDF
     for (const signature of signatures) {
       const pageIndex = signature.page - 1; // Translate 1-indexed page to 0-indexed page
@@ -207,14 +221,18 @@ router.post('/:id/finalize', protect, async (req, res) => {
       const x_center = (signature.x / 100) * width;
       const y_center = ((100 - signature.y) / 100) * height;
 
-      // Render a styled signature text box
-      const text = `Signed by: ${req.user.name}`;
-      const fontSize = 10;
-      const textWidth = font.widthOfTextAtSize(text, fontSize);
-      const paddingX = 8;
-      const paddingY = 6;
-      const boxWidth = textWidth + paddingX * 2;
-      const boxHeight = fontSize + paddingY * 2;
+      // Render a styled signature text or image box
+      let boxWidth, boxHeight;
+      if (isImageSig && pngImage) {
+        boxWidth = 120;
+        boxHeight = 45;
+      } else {
+        const text = `Signed by: ${req.user.name}`;
+        const fontSize = 10;
+        const textWidth = font.widthOfTextAtSize(text, fontSize);
+        boxWidth = textWidth + 16;
+        boxHeight = fontSize + 12;
+      }
 
       // Center the bounding box around (x_center, y_center)
       const drawX = x_center - (boxWidth / 2);
@@ -231,14 +249,23 @@ router.post('/:id/finalize', protect, async (req, res) => {
         borderWidth: 1,
       });
 
-      // Draw text
-      page.drawText(text, {
-        x: drawX + paddingX,
-        y: drawY + paddingY + 1.5, // vertical offset for text baseline alignment
-        size: fontSize,
-        font: font,
-        color: rgb(0.08, 0.55, 0.49), // Teal-600
-      });
+      if (isImageSig && pngImage) {
+        page.drawImage(pngImage, {
+          x: drawX + 4,
+          y: drawY + 4,
+          width: boxWidth - 8,
+          height: boxHeight - 8,
+        });
+      } else {
+        const text = `Signed by: ${req.user.name}`;
+        page.drawText(text, {
+          x: drawX + 8,
+          y: drawY + 6 + 1.5, // vertical offset for text baseline alignment
+          size: 10,
+          font: font,
+          color: rgb(0.08, 0.55, 0.49), // Teal-600
+        });
+      }
     }
 
     // Save finalized PDF
@@ -257,6 +284,9 @@ router.post('/:id/finalize', protect, async (req, res) => {
     // Update Document model
     document.status = 'signed';
     document.signedFilePath = signedFileName;
+    document.ownerSignatureMode = signatureMode || 'typed';
+    document.ownerSignatureFont = signatureFont;
+    document.ownerSignatureData = signatureData;
     await document.save();
 
     // Update all signatures status to 'signed'
@@ -693,7 +723,7 @@ router.post('/public/reject/:token', async (req, res) => {
 router.post('/public/sign/:token', async (req, res) => {
   try {
     const { token } = req.params;
-    const { signerName } = req.body;
+    const { signerName, signatureMode, signatureFont, signatureData } = req.body;
 
     if (!signerName || !signerName.trim()) {
       return res.status(400).json({ message: 'Please provide your name to sign the document' });
@@ -731,6 +761,9 @@ router.post('/public/sign/:token', async (req, res) => {
     signer.signedAt = new Date();
     signer.signingToken = null;
     signer.signingTokenExpires = null;
+    signer.signatureMode = signatureMode || 'typed';
+    signer.signatureFont = signatureFont;
+    signer.signatureData = signatureData;
 
     // Check if all signers are done
     const allSigned = document.signers.every(s => s.status === 'signed');
@@ -771,17 +804,33 @@ router.post('/public/sign/:token', async (req, res) => {
         const x_center = (signature.x / 100) * width;
         const y_center = ((100 - signature.y) / 100) * height;
 
-        // Retrieve signer's name
+        // Retrieve signer info
         const signerInfo = document.signers.find(s => s.email === signature.signerEmail);
-        const nameToStamp = signerInfo ? signerInfo.name : 'Signed';
         
-        const text = `Signed by: ${nameToStamp}`;
-        const fontSize = 10;
-        const textWidth = font.widthOfTextAtSize(text, fontSize);
-        const paddingX = 8;
-        const paddingY = 6;
-        const boxWidth = textWidth + paddingX * 2;
-        const boxHeight = fontSize + paddingY * 2;
+        const isImageSig = signerInfo && (signerInfo.signatureMode === 'drawn' || signerInfo.signatureMode === 'handwritten') && signerInfo.signatureData;
+        let pngImage;
+        if (isImageSig) {
+          try {
+            const base64Data = signerInfo.signatureData.replace(/^data:image\/png;base64,/, "");
+            const imageBuffer = Buffer.from(base64Data, 'base64');
+            pngImage = await pdfDoc.embedPng(imageBuffer);
+          } catch (err) {
+            console.error(`Failed to embed signature image for ${signerInfo.email}:`, err.message);
+          }
+        }
+
+        let boxWidth, boxHeight;
+        if (isImageSig && pngImage) {
+          boxWidth = 120;
+          boxHeight = 45;
+        } else {
+          const nameToStamp = signerInfo ? signerInfo.name : 'Signed';
+          const text = `Signed by: ${nameToStamp}`;
+          const fontSize = 10;
+          const textWidth = font.widthOfTextAtSize(text, fontSize);
+          boxWidth = textWidth + 16;
+          boxHeight = fontSize + 12;
+        }
 
         const drawX = x_center - (boxWidth / 2);
         const drawY = y_center - (boxHeight / 2);
@@ -797,14 +846,24 @@ router.post('/public/sign/:token', async (req, res) => {
           borderWidth: 1,
         });
 
-        // Draw text
-        page.drawText(text, {
-          x: drawX + paddingX,
-          y: drawY + paddingY + 1.5,
-          size: fontSize,
-          font: font,
-          color: rgb(0.08, 0.55, 0.49), // Teal-600
-        });
+        if (isImageSig && pngImage) {
+          page.drawImage(pngImage, {
+            x: drawX + 4,
+            y: drawY + 4,
+            width: boxWidth - 8,
+            height: boxHeight - 8,
+          });
+        } else {
+          const nameToStamp = signerInfo ? signerInfo.name : 'Signed';
+          const text = `Signed by: ${nameToStamp}`;
+          page.drawText(text, {
+            x: drawX + 8,
+            y: drawY + 6 + 1.5,
+            size: 10,
+            font: font,
+            color: rgb(0.08, 0.55, 0.49), // Teal-600
+          });
+        }
       }
 
       // Save finalized PDF
@@ -833,7 +892,7 @@ router.post('/public/sign/:token', async (req, res) => {
       signerEmail: signer.email,
       signerName: signerName.trim(),
       req,
-      metadata: { finalized: allSigned }
+      metadata: { finalized: allSigned, signatureMode: signer.signatureMode }
     });
 
     return res.json({

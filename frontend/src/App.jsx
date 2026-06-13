@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { Document as PDFDocument, Page as PDFPage, pdfjs } from 'react-pdf';
 
@@ -41,7 +41,77 @@ function App() {
   const [pageNumber, setPageNumber] = useState(1);
   const [signatures, setSignatures] = useState([]);
 
+  const canvasRef = useRef(null);
+  const ownerCanvasRef = useRef(null);
+  const drawingState = useRef({ isDrawing: false, hasDrawn: false });
+  const ownerDrawingState = useRef({ isDrawing: false, hasDrawn: false });
+
   const currentDoc = documents.find(d => d._id === activeDocumentId);
+
+  // Helper to get relative canvas coordinates for drawing
+  const getCanvasCoords = (e, canvas) => {
+    const rect = canvas.getBoundingClientRect();
+    let clientX, clientY;
+    if (e.touches && e.touches.length > 0) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else {
+      clientX = e.clientX;
+      clientY = e.clientY;
+    }
+    return {
+      x: (clientX - rect.left) * (canvas.width / rect.width),
+      y: (clientY - rect.top) * (canvas.height / rect.height)
+    };
+  };
+
+  const startDrawing = (e, canvas, stateRef) => {
+    e.preventDefault();
+    const ctx = canvas.getContext('2d');
+    const coords = getCanvasCoords(e, canvas);
+    ctx.beginPath();
+    ctx.moveTo(coords.x, coords.y);
+    stateRef.current.isDrawing = true;
+    stateRef.current.hasDrawn = true;
+  };
+
+  const draw = (e, canvas, stateRef) => {
+    if (!stateRef.current.isDrawing) return;
+    e.preventDefault();
+    const ctx = canvas.getContext('2d');
+    const coords = getCanvasCoords(e, canvas);
+    ctx.lineTo(coords.x, coords.y);
+    ctx.strokeStyle = '#0f766e'; // Teal-700
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+  };
+
+  const stopDrawing = (stateRef) => {
+    stateRef.current.isDrawing = false;
+  };
+
+  const clearCanvas = (canvas, stateRef) => {
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    stateRef.current.hasDrawn = false;
+  };
+
+  const generateHandwrittenSignatureImage = (text, fontName) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 400;
+    canvas.height = 150;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.font = `italic 42px "${fontName}", cursive, sans-serif`;
+    ctx.fillStyle = '#0f766e'; // Teal-700
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+    return canvas.toDataURL('image/png');
+  };
   const isSigned = currentDoc?.status === 'signed';
 
   // Day 9 Public Sharing & Sign States
@@ -54,6 +124,14 @@ function App() {
   const [rejectReason, setRejectReason] = useState('');
   const [isRejectingPublic, setIsRejectingPublic] = useState(false);
   const [showRejectForm, setShowRejectForm] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [sigMode, setSigMode] = useState('typed');
+  const [sigFont, setSigFont] = useState('Caveat');
+  
+  const [isOwnerSigModalOpen, setIsOwnerSigModalOpen] = useState(false);
+  const [ownerSigName, setOwnerSigName] = useState('');
+  const [ownerSigMode, setOwnerSigMode] = useState('typed');
+  const [ownerSigFont, setOwnerSigFont] = useState('Caveat');
   
   // Dashboard Share Modal States
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
@@ -64,6 +142,12 @@ function App() {
   const [shareError, setShareError] = useState('');
 
   // Check for public signing token on mount or auto-login if token exists
+  useEffect(() => {
+    if (user && user.name) {
+      setOwnerSigName(user.name);
+    }
+  }, [user]);
+
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const tokenParam = urlParams.get('token');
@@ -103,11 +187,25 @@ function App() {
       return;
     }
 
+    let signatureData = '';
+    if (sigMode === 'handwritten') {
+      signatureData = generateHandwrittenSignatureImage(signerName, sigFont);
+    } else if (sigMode === 'drawn') {
+      if (!drawingState.current.hasDrawn) {
+        alert('Please draw your signature on the canvas first.');
+        return;
+      }
+      signatureData = canvasRef.current.toDataURL('image/png');
+    }
+
     setIsSigningPublic(true);
     setPublicSignError('');
     try {
       await axios.post(`http://localhost:5000/api/docs/public/sign/${publicToken}`, {
-        signerName
+        signerName,
+        signatureMode: sigMode,
+        signatureFont: sigMode === 'handwritten' ? sigFont : undefined,
+        signatureData
       });
       setView('public-success');
     } catch (error) {
@@ -255,8 +353,28 @@ function App() {
   // Finalize document (render signature boxes using PDF-Lib on backend)
   const handleFinalizeDocument = async () => {
     if (!activeDocumentId) return;
+
+    let signatureData = '';
+    if (ownerSigMode === 'handwritten') {
+      if (!ownerSigName.trim()) {
+        alert('Please enter a name for the handwritten signature.');
+        return;
+      }
+      signatureData = generateHandwrittenSignatureImage(ownerSigName, ownerSigFont);
+    } else if (ownerSigMode === 'drawn') {
+      if (!ownerDrawingState.current.hasDrawn) {
+        alert('Please draw your signature on the canvas first.');
+        return;
+      }
+      signatureData = ownerCanvasRef.current.toDataURL('image/png');
+    }
+
     try {
-      const response = await axios.post(`http://localhost:5000/api/docs/${activeDocumentId}/finalize`, {}, {
+      const response = await axios.post(`http://localhost:5000/api/docs/${activeDocumentId}/finalize`, {
+        signatureMode: ownerSigMode,
+        signatureFont: ownerSigMode === 'handwritten' ? ownerSigFont : undefined,
+        signatureData
+      }, {
         headers: {
           Authorization: `Bearer ${token}`
         }
@@ -276,6 +394,7 @@ function App() {
       const blobUrl = URL.createObjectURL(new Blob([downloadResponse.data]));
       setPreviewFileUrl(blobUrl);
       setSignatures([]); // Clear coordinates overlay since signature is now baked into the PDF
+      setIsOwnerSigModalOpen(false);
       alert(response.data.message || 'Document finalized and signed successfully!');
     } catch (error) {
       console.error('Finalize failed:', error);
@@ -755,107 +874,240 @@ function App() {
                   </p>
                 </div>
               ) : (
-                /* Document Table List */
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs border-collapse">
-                    <thead>
-                      <tr className="border-b border-slate-200 text-slate-400 font-semibold uppercase tracking-wider">
-                        <th className="py-3 px-2">Document Name</th>
-                        <th className="py-3 px-2">Size</th>
-                        <th className="py-3 px-2">Date Added</th>
-                        <th className="py-3 px-2">Signing Flow</th>
-                        <th className="py-3 px-2 text-right">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 text-slate-700">
-                      {documents.map((doc) => (
-                        <tr key={doc._id} className="hover:bg-slate-50/50 transition duration-150">
-                          <td className="py-3.5 px-2 font-medium text-slate-900 max-w-[200px] truncate" title={doc.fileName}>
-                            {doc.fileName}
-                          </td>
-                          <td className="py-3.5 px-2 text-slate-500">
-                            {formatBytes(doc.fileSize)}
-                          </td>
-                          <td className="py-3.5 px-2 text-slate-500">
-                            {new Date(doc.createdAt).toLocaleDateString()}
-                          </td>
-                          <td className="py-3.5 px-2">
-                            <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-slate-100 text-slate-600 border border-slate-200">
-                              {doc.signerType === 'only-you' ? 'Only You' : 'Many People'}
-                            </span>
-                            {doc.status === 'signed' ? (
-                              <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 ml-1.5">
-                                Signed
-                              </span>
-                            ) : doc.status === 'rejected' ? (
-                              <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-rose-50 text-rose-700 border border-rose-200 ml-1.5">
-                                Rejected
-                              </span>
-                            ) : (
-                              <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-amber-50 text-amber-700 border border-amber-200 ml-1.5">
-                                Pending
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-3.5 px-2 text-right">
-                            {doc.status === 'signed' ? (
-                              <div className="flex gap-2 justify-end">
-                                <button
-                                  type="button"
-                                  onClick={() => handleViewSignedDocument(doc)}
-                                  className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 rounded-lg text-[10px] font-bold transition cursor-pointer"
-                                >
-                                  View Document
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDownloadSigned(doc._id, doc.fileName)}
-                                  className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-[10px] font-bold transition cursor-pointer"
-                                >
-                                  Download Signed
-                                </button>
+                /* Document Table List & Mobile Cards */
+                <>
+                  {/* Status filter tabs */}
+                  <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-3">
+                    <div className="flex flex-wrap gap-1.5">
+                      {['all', 'pending', 'signed', 'rejected'].map((status) => (
+                        <button
+                          key={status}
+                          type="button"
+                          onClick={() => setStatusFilter(status)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition capitalize cursor-pointer ${
+                            statusFilter === status
+                              ? 'bg-teal-600 text-white shadow-sm'
+                              : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          {status}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {documents.filter(doc => statusFilter === 'all' || doc.status === statusFilter).length === 0 ? (
+                    <div className="flex flex-col items-center justify-center text-center p-8">
+                      <div className="w-10 h-10 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-300 mb-2">
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                        </svg>
+                      </div>
+                      <h4 className="text-xs font-bold text-slate-700">No {statusFilter !== 'all' ? statusFilter : ''} documents found</h4>
+                      <p className="text-[11px] text-slate-400 max-w-sm mt-1 leading-relaxed">
+                        There are no documents matching your selected status filter in this workspace.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Desktop Table view */}
+                      <div className="hidden md:block overflow-x-auto">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead>
+                            <tr className="border-b border-slate-200 text-slate-400 font-semibold uppercase tracking-wider">
+                              <th className="py-3 px-2">Document Name</th>
+                              <th className="py-3 px-2">Size</th>
+                              <th className="py-3 px-2">Date Added</th>
+                              <th className="py-3 px-2">Signing Flow</th>
+                              <th className="py-3 px-2 text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-slate-700">
+                            {documents.filter(doc => statusFilter === 'all' || doc.status === statusFilter).map((doc) => (
+                              <tr key={doc._id} className="hover:bg-slate-50/50 transition duration-150">
+                                <td className="py-3.5 px-2 font-medium text-slate-900 max-w-[200px] truncate" title={doc.fileName}>
+                                  {doc.fileName}
+                                </td>
+                                <td className="py-3.5 px-2 text-slate-500">
+                                  {formatBytes(doc.fileSize)}
+                                </td>
+                                <td className="py-3.5 px-2 text-slate-500">
+                                  {new Date(doc.createdAt).toLocaleDateString()}
+                                </td>
+                                <td className="py-3.5 px-2">
+                                  <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+                                    {doc.signerType === 'only-you' ? 'Only You' : 'Many People'}
+                                  </span>
+                                  {doc.status === 'signed' ? (
+                                    <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 ml-1.5">
+                                      Signed
+                                    </span>
+                                  ) : doc.status === 'rejected' ? (
+                                    <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-rose-50 text-rose-700 border border-rose-200 ml-1.5">
+                                      Rejected
+                                    </span>
+                                  ) : (
+                                    <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-amber-50 text-amber-700 border border-amber-200 ml-1.5">
+                                      Pending
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-3.5 px-2 text-right">
+                                  {doc.status === 'signed' ? (
+                                    <div className="flex gap-2 justify-end">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleViewSignedDocument(doc)}
+                                        className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 rounded-lg text-[10px] font-bold transition cursor-pointer"
+                                      >
+                                        View Document
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDownloadSigned(doc._id, doc.fileName)}
+                                        className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-[10px] font-bold transition cursor-pointer"
+                                      >
+                                        Download Signed
+                                      </button>
+                                    </div>
+                                  ) : doc.status === 'rejected' ? (
+                                    <div className="text-[10px] text-rose-600 font-semibold italic max-w-[200px] truncate ml-auto" title={doc.rejectReason}>
+                                      Reason: {doc.rejectReason || 'No reason specified'}
+                                    </div>
+                                  ) : (
+                                    <div className="flex gap-2 justify-end">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setPreviewFileUrl(`http://localhost:5000/uploads/${doc.filePath}`);
+                                          setActiveDocumentId(doc._id);
+                                          fetchSignatures(doc._id, token);
+                                          setPageNumber(1);
+                                        }}
+                                        className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 rounded-lg text-[10px] font-bold transition cursor-pointer"
+                                      >
+                                        Open Editor
+                                      </button>
+                                      {doc.signerType === 'many-people' && doc.status === 'pending' && (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setShareDocId(doc._id);
+                                            setIsShareModalOpen(true);
+                                            setShareEmails('');
+                                            setShareResults(null);
+                                            setShareError('');
+                                          }}
+                                          className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-[10px] font-bold transition cursor-pointer"
+                                        >
+                                          Invite Signer
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Mobile Card view */}
+                      <div className="md:hidden flex flex-col gap-4">
+                        {documents.filter(doc => statusFilter === 'all' || doc.status === statusFilter).map((doc) => (
+                          <div key={doc._id} className="bg-slate-50/50 border border-slate-200 rounded-xl p-4 flex flex-col gap-3">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="font-semibold text-slate-900 truncate" title={doc.fileName}>
+                                {doc.fileName}
                               </div>
-                            ) : doc.status === 'rejected' ? (
-                              <div className="text-[10px] text-rose-600 font-semibold italic max-w-[200px] truncate ml-auto" title={doc.rejectReason}>
-                                Reason: {doc.rejectReason || 'No reason specified'}
-                              </div>
-                            ) : (
-                              <div className="flex gap-2 justify-end">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setPreviewFileUrl(`http://localhost:5000/uploads/${doc.filePath}`);
-                                    setActiveDocumentId(doc._id);
-                                    fetchSignatures(doc._id, token);
-                                    setPageNumber(1);
-                                  }}
-                                  className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 rounded-lg text-[10px] font-bold transition cursor-pointer"
-                                >
-                                  Open Editor
-                                </button>
-                                {doc.signerType === 'many-people' && doc.status === 'pending' && (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setShareDocId(doc._id);
-                                      setIsShareModalOpen(true);
-                                      setShareEmails('');
-                                      setShareResults(null);
-                                      setShareError('');
-                                    }}
-                                    className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-[10px] font-bold transition cursor-pointer"
-                                  >
-                                    Invite Signer
-                                  </button>
+                              <span className="shrink-0 px-2 py-0.5 text-[10px] font-semibold rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+                                {doc.signerType === 'only-you' ? 'Only You' : 'Many People'}
+                              </span>
+                            </div>
+                            
+                            <div className="flex items-center justify-between text-[11px] text-slate-500">
+                              <div>Size: {formatBytes(doc.fileSize)}</div>
+                              <div>Added: {new Date(doc.createdAt).toLocaleDateString()}</div>
+                            </div>
+
+                            <div className="flex items-center justify-between border-t border-slate-200/60 pt-2.5">
+                              <div>
+                                {doc.status === 'signed' ? (
+                                  <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                    Signed
+                                  </span>
+                                ) : doc.status === 'rejected' ? (
+                                  <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-rose-50 text-rose-700 border border-rose-200">
+                                    Rejected
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                                    Pending
+                                  </span>
                                 )}
                               </div>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                              
+                              <div className="flex gap-1.5">
+                                {doc.status === 'signed' ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleViewSignedDocument(doc)}
+                                      className="px-2 py-1 bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 rounded-lg text-[10px] font-bold transition cursor-pointer"
+                                    >
+                                      View
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDownloadSigned(doc._id, doc.fileName)}
+                                      className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-[10px] font-bold transition cursor-pointer"
+                                    >
+                                      Download
+                                    </button>
+                                  </>
+                                ) : doc.status === 'rejected' ? (
+                                  <div className="text-[10px] text-rose-600 font-semibold italic max-w-[150px] truncate" title={doc.rejectReason}>
+                                    Reason: {doc.rejectReason || 'No reason specified'}
+                                  </div>
+                                ) : (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setPreviewFileUrl(`http://localhost:5000/uploads/${doc.filePath}`);
+                                        setActiveDocumentId(doc._id);
+                                        fetchSignatures(doc._id, token);
+                                        setPageNumber(1);
+                                      }}
+                                      className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 rounded-lg text-[10px] font-bold transition cursor-pointer"
+                                    >
+                                      Editor
+                                    </button>
+                                    {doc.signerType === 'many-people' && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setShareDocId(doc._id);
+                                          setIsShareModalOpen(true);
+                                          setShareEmails('');
+                                          setShareResults(null);
+                                          setShareError('');
+                                        }}
+                                        className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-[10px] font-bold transition cursor-pointer"
+                                      >
+                                        Invite
+                                      </button>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </>
               )}
             </div>
 
@@ -992,7 +1244,12 @@ function App() {
                     {!isSigned && currentDoc?.signerType === 'only-you' && (
                       <button
                         type="button"
-                        onClick={handleFinalizeDocument}
+                        onClick={() => {
+                          setIsOwnerSigModalOpen(true);
+                          setOwnerSigName(user?.name || '');
+                          setOwnerSigMode('typed');
+                          setOwnerSigFont('Caveat');
+                        }}
                         className="px-4 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition cursor-pointer shadow-sm"
                       >
                         Generate Signed PDF
@@ -1192,6 +1449,163 @@ function App() {
             </div>
           )}
 
+          {/* Owner Signature Modal */}
+          {isOwnerSigModalOpen && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[60] overflow-y-auto">
+              <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-md flex flex-col shadow-xl p-6 gap-4 animate-in fade-in zoom-in-95 duration-150">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <h3 className="text-sm font-bold text-slate-800">Finalize & Sign Document</h3>
+                  <button 
+                    onClick={() => setIsOwnerSigModalOpen(false)}
+                    className="text-slate-400 hover:text-slate-600 font-bold text-lg px-2 cursor-pointer"
+                  >
+                    &times;
+                  </button>
+                </div>
+
+                {/* Tab selectors for owner signature mode */}
+                <div className="flex border border-slate-200 rounded-xl p-1 bg-slate-50/50">
+                  {['typed', 'handwritten', 'drawn'].map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setOwnerSigMode(mode)}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition capitalize cursor-pointer ${
+                        ownerSigMode === mode
+                          ? 'bg-teal-600 text-white shadow-sm'
+                          : 'text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      {mode}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Option 1: Typed Signature */}
+                {ownerSigMode === 'typed' && (
+                  <div className="flex flex-col gap-2.5">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-semibold text-slate-600">Your Full Name</label>
+                      <input 
+                        type="text" 
+                        value={ownerSigName}
+                        onChange={(e) => setOwnerSigName(e.target.value)}
+                        placeholder="Type your name to sign" 
+                        className="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-xs focus:outline-none focus:border-teal-500 bg-slate-50/50 font-mono"
+                      />
+                    </div>
+                    <div className="border border-slate-200 bg-slate-50/40 p-4 rounded-xl flex items-center justify-center min-h-[80px]">
+                      <span className="text-slate-800 font-bold text-sm">
+                        Signed by: {ownerSigName || 'Your Name'}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Option 2: Handwritten-style signature */}
+                {ownerSigMode === 'handwritten' && (
+                  <div className="flex flex-col gap-2.5">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-semibold text-slate-600">Your Full Name</label>
+                      <input 
+                        type="text" 
+                        value={ownerSigName}
+                        onChange={(e) => setOwnerSigName(e.target.value)}
+                        placeholder="Type your name to style" 
+                        className="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-xs focus:outline-none focus:border-teal-500 bg-slate-50/50"
+                      />
+                    </div>
+                    
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-semibold text-slate-600">Choose Signature Style</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {['Caveat', 'Alex Brush', 'Sacramento', 'Great Vibes'].map((font) => (
+                          <button
+                            key={font}
+                            type="button"
+                            onClick={() => setOwnerSigFont(font)}
+                            className={`p-2 border rounded-xl text-center text-lg transition truncate cursor-pointer ${
+                              ownerSigFont === font
+                                ? 'border-teal-600 bg-teal-50/20 text-teal-900 font-bold'
+                                : 'border-slate-200 bg-slate-50/30 text-slate-700 hover:bg-slate-50'
+                            }`}
+                            style={{ fontFamily: font }}
+                          >
+                            {ownerSigName || 'Signature'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-semibold text-slate-400">Preview</label>
+                      <div 
+                        className="border border-teal-100 bg-teal-50/10 rounded-xl p-4 flex items-center justify-center min-h-[90px] shadow-sm select-none"
+                        style={{ fontFamily: ownerSigFont }}
+                      >
+                        <span className="text-teal-800 text-3xl leading-none">
+                          {ownerSigName || 'Signature Preview'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Option 3: Draw signature */}
+                {ownerSigMode === 'drawn' && (
+                  <div className="flex flex-col gap-2.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-semibold text-slate-600">Draw Signature below</label>
+                      <button
+                        type="button"
+                        onClick={() => clearCanvas(ownerCanvasRef.current, ownerDrawingState)}
+                        className="text-[10px] text-teal-600 hover:text-teal-800 font-bold hover:underline cursor-pointer"
+                      >
+                        Clear Canvas
+                      </button>
+                    </div>
+
+                    <div className="border border-slate-200 bg-slate-50/30 rounded-xl overflow-hidden shadow-inner">
+                      <canvas
+                        ref={ownerCanvasRef}
+                        width={400}
+                        height={150}
+                        onMouseDown={(e) => startDrawing(e, ownerCanvasRef.current, ownerDrawingState)}
+                        onMouseMove={(e) => draw(e, ownerCanvasRef.current, ownerDrawingState)}
+                        onMouseUp={() => stopDrawing(ownerDrawingState)}
+                        onMouseLeave={() => stopDrawing(ownerDrawingState)}
+                        onTouchStart={(e) => startDrawing(e, ownerCanvasRef.current, ownerDrawingState)}
+                        onTouchMove={(e) => draw(e, ownerCanvasRef.current, ownerDrawingState)}
+                        onTouchEnd={() => stopDrawing(ownerDrawingState)}
+                        className="w-full h-[150px] cursor-crosshair bg-white"
+                      />
+                    </div>
+                    <p className="text-[10px] text-slate-400">
+                      Use your mouse, trackpad, or touchscreen to draw your signature inside the area.
+                    </p>
+                  </div>
+                )}
+
+                <div className="flex gap-2.5 border-t border-slate-100 pt-3 mt-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setIsOwnerSigModalOpen(false)}
+                    className="flex-1 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl py-2 font-bold text-xs transition cursor-pointer text-center"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleFinalizeDocument}
+                    className="flex-1 bg-teal-600 hover:bg-teal-700 text-white rounded-xl py-2 font-bold text-xs transition cursor-pointer shadow-sm text-center"
+                  >
+                    Confirm & Sign
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
         </div>
       )}
 
@@ -1235,22 +1649,133 @@ function App() {
 
                 {!showRejectForm ? (
                   <form onSubmit={handlePublicSign} className="flex flex-col gap-3.5 border-t border-slate-100 pt-3">
-                    <div className="flex flex-col gap-1.5">
-                      <label className="text-xs font-semibold text-slate-600">Your Full Name</label>
-                      <input 
-                        type="text" 
-                        value={signerName}
-                        onChange={(e) => setSignerName(e.target.value)}
-                        placeholder="Type your name to sign" 
-                        required
-                        className="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-xs focus:outline-none focus:border-teal-500 bg-slate-50/50"
-                      />
+                    
+                    {/* Tab selectors for public signature mode */}
+                    <div className="flex border border-slate-200 rounded-xl p-0.5 bg-slate-50/50">
+                      {['typed', 'handwritten', 'drawn'].map((mode) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => setSigMode(mode)}
+                          className={`flex-1 py-1 rounded-lg text-[10px] font-bold transition capitalize cursor-pointer ${
+                            sigMode === mode
+                              ? 'bg-teal-600 text-white shadow-sm'
+                              : 'text-slate-600 hover:bg-slate-100'
+                          }`}
+                        >
+                          {mode}
+                        </button>
+                      ))}
                     </div>
+
+                    {/* Option 1: Typed Signature */}
+                    {sigMode === 'typed' && (
+                      <div className="flex flex-col gap-2.5">
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-xs font-semibold text-slate-600">Your Full Name</label>
+                          <input 
+                            type="text" 
+                            value={signerName}
+                            onChange={(e) => setSignerName(e.target.value)}
+                            placeholder="Type your name to sign" 
+                            required
+                            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-teal-500 bg-slate-50/50 font-mono"
+                          />
+                        </div>
+                        <div className="border border-slate-200 bg-slate-50/40 p-3 rounded-xl flex items-center justify-center min-h-[60px]">
+                          <span className="text-slate-800 font-bold text-xs">
+                            Signed by: {signerName || 'Your Name'}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Option 2: Handwritten-style signature */}
+                    {sigMode === 'handwritten' && (
+                      <div className="flex flex-col gap-2.5">
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-xs font-semibold text-slate-600">Your Full Name</label>
+                          <input 
+                            type="text" 
+                            value={signerName}
+                            onChange={(e) => setSignerName(e.target.value)}
+                            placeholder="Type your name to style" 
+                            required
+                            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-teal-500 bg-slate-50/50"
+                          />
+                        </div>
+                        
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-xs font-semibold text-slate-600">Choose Signature Style</label>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            {['Caveat', 'Alex Brush', 'Sacramento', 'Great Vibes'].map((font) => (
+                              <button
+                                key={font}
+                                type="button"
+                                onClick={() => setSigFont(font)}
+                                className={`p-1.5 border rounded-lg text-center text-sm transition truncate cursor-pointer ${
+                                  sigFont === font
+                                    ? 'border-teal-600 bg-teal-50/20 text-teal-900 font-bold'
+                                    : 'border-slate-200 bg-slate-50/30 text-slate-700 hover:bg-slate-50'
+                                }`}
+                                style={{ fontFamily: font }}
+                              >
+                                {signerName || 'Signature'}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[10px] font-semibold text-slate-400">Preview</label>
+                          <div 
+                            className="border border-teal-100 bg-teal-50/10 rounded-xl p-3 flex items-center justify-center min-h-[70px] shadow-sm select-none"
+                            style={{ fontFamily: sigFont }}
+                          >
+                            <span className="text-teal-800 text-2xl leading-none">
+                              {signerName || 'Signature Preview'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Option 3: Draw signature */}
+                    {sigMode === 'drawn' && (
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-semibold text-slate-600">Draw Signature below</label>
+                          <button
+                            type="button"
+                            onClick={() => clearCanvas(canvasRef.current, drawingState)}
+                            className="text-[10px] text-teal-600 hover:text-teal-800 font-bold hover:underline cursor-pointer"
+                          >
+                            Clear
+                          </button>
+                        </div>
+
+                        <div className="border border-slate-200 bg-slate-50/30 rounded-xl overflow-hidden">
+                          <canvas
+                            ref={canvasRef}
+                            width={300}
+                            height={120}
+                            onMouseDown={(e) => startDrawing(e, canvasRef.current, drawingState)}
+                            onMouseMove={(e) => draw(e, canvasRef.current, drawingState)}
+                            onMouseUp={() => stopDrawing(drawingState)}
+                            onMouseLeave={() => stopDrawing(drawingState)}
+                            onTouchStart={(e) => startDrawing(e, canvasRef.current, drawingState)}
+                            onTouchMove={(e) => draw(e, canvasRef.current, drawingState)}
+                            onTouchEnd={() => stopDrawing(drawingState)}
+                            className="w-full h-[120px] cursor-crosshair bg-white"
+                          />
+                        </div>
+                      </div>
+                    )}
 
                     <button 
                       type="submit" 
                       disabled={isSigningPublic}
-                      className="w-full bg-teal-600 hover:bg-teal-700 disabled:bg-slate-300 text-white rounded-xl py-2.5 font-bold text-xs transition cursor-pointer shadow-sm"
+                      className="w-full bg-teal-600 hover:bg-teal-700 disabled:bg-slate-300 text-white rounded-xl py-2.5 font-bold text-xs transition cursor-pointer shadow-sm mt-1"
                     >
                       {isSigningPublic ? 'Signing Document...' : 'Sign & Complete'}
                     </button>
