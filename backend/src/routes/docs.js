@@ -72,6 +72,32 @@ router.post('/upload', protect, (req, res) => {
     try {
       const { signerType } = req.body;
 
+      // Upload to Supabase Storage if available
+      const supabase = require('../config/supabase');
+      if (supabase) {
+        try {
+          const fileBuffer = fs.readFileSync(req.file.path);
+          const { error: uploadError } = await supabase.storage
+            .from('documents')
+            .upload('uploads/' + req.file.filename, fileBuffer, {
+              contentType: 'application/pdf',
+              upsert: true
+            });
+          if (uploadError) {
+            console.error('Supabase upload error:', uploadError.message);
+          } else {
+            // Delete local temp file if successfully uploaded to Supabase Storage
+            try {
+              fs.unlinkSync(req.file.path);
+            } catch (unlinkErr) {
+              console.error('Failed to delete local temp file:', unlinkErr.message);
+            }
+          }
+        } catch (err) {
+          console.error('Supabase upload exception:', err.message);
+        }
+      }
+
       // Save document details to MongoDB
       const document = await Document.create({
         fileName: req.file.originalname,
@@ -87,6 +113,13 @@ router.post('/upload', protect, (req, res) => {
       });
     } catch (dbError) {
       console.error('Database write error:', dbError.message);
+      
+      const supabase = require('../config/supabase');
+      if (supabase && req.file) {
+        try {
+          await supabase.storage.from('documents').remove(['uploads/' + req.file.filename]);
+        } catch (removeErr) {}
+      }
       
       if (req.file && fs.existsSync(req.file.path)) {
         fs.unlinkSync(req.file.path);
@@ -178,14 +211,37 @@ router.post('/:id/finalize', protect, async (req, res) => {
 
     const { signatureMode, signatureFont, signatureData } = req.body;
 
-    // Get path of original uploaded PDF
-    const originalPath = path.join(UPLOAD_DIR, document.filePath);
-    if (!fs.existsSync(originalPath)) {
-      return res.status(404).json({ message: 'Original PDF file not found on server.' });
+    // Read original PDF into buffer (from Supabase or local fallback)
+    let existingPdfBytes;
+    const supabase = require('../config/supabase');
+    if (supabase) {
+      try {
+        const { data, error } = await supabase.storage.from('documents').download('uploads/' + document.filePath);
+        if (error || !data) {
+          console.warn('Supabase download failed, checking local fallback:', error?.message);
+          const originalPath = path.join(UPLOAD_DIR, document.filePath);
+          if (!fs.existsSync(originalPath)) {
+            return res.status(404).json({ message: 'Original PDF file not found.' });
+          }
+          existingPdfBytes = fs.readFileSync(originalPath);
+        } else {
+          existingPdfBytes = Buffer.from(await data.arrayBuffer());
+        }
+      } catch (err) {
+        console.warn('Supabase download error, checking local fallback:', err.message);
+        const originalPath = path.join(UPLOAD_DIR, document.filePath);
+        if (!fs.existsSync(originalPath)) {
+          return res.status(404).json({ message: 'Original PDF file not found.' });
+        }
+        existingPdfBytes = fs.readFileSync(originalPath);
+      }
+    } else {
+      const originalPath = path.join(UPLOAD_DIR, document.filePath);
+      if (!fs.existsSync(originalPath)) {
+        return res.status(404).json({ message: 'Original PDF file not found on server.' });
+      }
+      existingPdfBytes = fs.readFileSync(originalPath);
     }
-
-    // Read original PDF into buffer
-    const existingPdfBytes = fs.readFileSync(originalPath);
 
     // Load PDF using pdf-lib
     const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
@@ -278,7 +334,22 @@ router.post('/:id/finalize', protect, async (req, res) => {
     const signedFileName = `${baseName}-signed-${uniqueSuffix}${ext}`;
     const signedFilePath = path.join(SIGNED_DIR, signedFileName);
 
-    // Write file to signed-pdfs folder
+    // Write file to signed-pdfs folder and upload to Supabase Storage
+    if (supabase) {
+      try {
+        const { error: signedUploadError } = await supabase.storage
+          .from('documents')
+          .upload('signed/' + signedFileName, Buffer.from(signedPdfBytes), {
+            contentType: 'application/pdf',
+            upsert: true
+          });
+        if (signedUploadError) {
+          console.error('Supabase signed upload error:', signedUploadError.message);
+        }
+      } catch (err) {
+        console.error('Supabase signed upload exception:', err.message);
+      }
+    }
     fs.writeFileSync(signedFilePath, signedPdfBytes);
 
     // Update Document model
@@ -340,6 +411,19 @@ router.get('/:id/download-signed', protect, async (req, res) => {
       return res.status(400).json({ message: 'Document has not been finalized yet' });
     }
 
+    const supabase = require('../config/supabase');
+    if (supabase) {
+      try {
+        const { data, error } = await supabase.storage.from('documents').download('signed/' + document.signedFilePath);
+        if (!error && data) {
+          const buffer = Buffer.from(await data.arrayBuffer());
+          res.setHeader('Content-Type', 'application/pdf');
+          return res.send(buffer);
+        }
+      } catch (err) {
+        console.warn('Supabase signed download error, checking local fallback:', err.message);
+      }
+    }
     const filePath = path.join(SIGNED_DIR, document.signedFilePath);
     if (!fs.existsSync(filePath)) {
       return res.status(404).json({ message: 'Signed PDF file not found on server disk storage' });
@@ -621,13 +705,6 @@ router.get('/public/view/:token', async (req, res) => {
       return res.status(400).json({ message: 'Signing link has expired' });
     }
 
-    const filePath = path.join(UPLOAD_DIR, document.filePath);
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ message: 'Original PDF file not found' });
-    }
-
-    res.setHeader('Content-Type', 'application/pdf');
-
     await logAudit({
       fileId: document._id,
       action: 'document_viewed',
@@ -635,7 +712,26 @@ router.get('/public/view/:token', async (req, res) => {
       req
     });
 
-    return res.sendFile(filePath);
+    const supabase = require('../config/supabase');
+    if (supabase) {
+      try {
+        const { data, error } = await supabase.storage.from('documents').download('uploads/' + document.filePath);
+        if (!error && data) {
+          const buffer = Buffer.from(await data.arrayBuffer());
+          res.setHeader('Content-Type', 'application/pdf');
+          return res.send(buffer);
+        }
+      } catch (err) {
+        console.warn('Supabase preview download error, checking local fallback:', err.message);
+      }
+    }
+
+    const filePath = path.join(UPLOAD_DIR, document.filePath);
+    if (fs.existsSync(filePath)) {
+      res.setHeader('Content-Type', 'application/pdf');
+      return res.sendFile(filePath);
+    }
+    return res.status(404).json({ message: 'Original PDF file not found' });
 
   } catch (error) {
     console.error('Error serving public PDF:', error.message);
@@ -774,13 +870,37 @@ router.post('/public/sign/:token', async (req, res) => {
         return res.status(400).json({ message: 'Please place at least one signature box before finalizing.' });
       }
 
-      const originalPath = path.join(UPLOAD_DIR, document.filePath);
-      if (!fs.existsSync(originalPath)) {
-        return res.status(404).json({ message: 'Original PDF file not found' });
+      // Read original PDF into buffer (from Supabase or local fallback)
+      let existingPdfBytes;
+      const supabase = require('../config/supabase');
+      if (supabase) {
+        try {
+          const { data, error } = await supabase.storage.from('documents').download('uploads/' + document.filePath);
+          if (error || !data) {
+            console.warn('Supabase download failed, checking local fallback:', error?.message);
+            const originalPath = path.join(UPLOAD_DIR, document.filePath);
+            if (!fs.existsSync(originalPath)) {
+              return res.status(404).json({ message: 'Original PDF file not found' });
+            }
+            existingPdfBytes = fs.readFileSync(originalPath);
+          } else {
+            existingPdfBytes = Buffer.from(await data.arrayBuffer());
+          }
+        } catch (err) {
+          console.warn('Supabase download error, checking local fallback:', err.message);
+          const originalPath = path.join(UPLOAD_DIR, document.filePath);
+          if (!fs.existsSync(originalPath)) {
+            return res.status(404).json({ message: 'Original PDF file not found' });
+          }
+          existingPdfBytes = fs.readFileSync(originalPath);
+        }
+      } else {
+        const originalPath = path.join(UPLOAD_DIR, document.filePath);
+        if (!fs.existsSync(originalPath)) {
+          return res.status(404).json({ message: 'Original PDF file not found' });
+        }
+        existingPdfBytes = fs.readFileSync(originalPath);
       }
-
-      // Read original PDF into buffer
-      const existingPdfBytes = fs.readFileSync(originalPath);
 
       // Load PDF using pdf-lib
       const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
@@ -875,6 +995,21 @@ router.post('/public/sign/:token', async (req, res) => {
       const signedFileName = `${baseName}-signed-${uniqueSuffix}${ext}`;
       const signedFilePath = path.join(SIGNED_DIR, signedFileName);
 
+      if (supabase) {
+        try {
+          const { error: signedUploadError } = await supabase.storage
+            .from('documents')
+            .upload('signed/' + signedFileName, Buffer.from(signedPdfBytes), {
+              contentType: 'application/pdf',
+              upsert: true
+            });
+          if (signedUploadError) {
+            console.error('Supabase signed upload error:', signedUploadError.message);
+          }
+        } catch (err) {
+          console.error('Supabase signed upload exception:', err.message);
+        }
+      }
       fs.writeFileSync(signedFilePath, signedPdfBytes);
 
       document.status = 'signed';

@@ -1,22 +1,94 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { Document as PDFDocument, Page as PDFPage, pdfjs } from 'react-pdf';
+import { DndContext, useDraggable, useDroppable } from '@dnd-kit/core';
+import { useForm } from 'react-hook-form';
+import { z } from 'zod';
 
 // Configure the pdfjs worker to resolve react-pdf dependency
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+
+// Draggable Sidebar Item (Signature field from palette)
+function DraggableSidebarItem() {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: 'new-signature',
+  });
+  const style = transform ? {
+    transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
+    zIndex: isDragging ? 50 : undefined
+  } : undefined;
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...listeners}
+      {...attributes}
+      className="border border-dashed border-teal-400 bg-teal-50/50 hover:bg-teal-50 text-teal-700 p-4 rounded-xl flex flex-col items-center justify-center text-center cursor-grab active:cursor-grabbing shadow-sm transition duration-150 select-none group"
+    >
+      <svg className="w-6 h-6 mb-2 text-teal-600 group-hover:scale-105 transition" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+      </svg>
+      <span className="text-xs font-bold">Signature Box</span>
+      <span className="text-[9px] text-slate-400 mt-1">Drag and drop on page</span>
+    </div>
+  );
+}
+
+// Droppable PDF Container (PDF page wrapper)
+function DroppablePDFContainer({ children }) {
+  const { setNodeRef } = useDroppable({
+    id: 'pdf-page',
+  });
+
+  return (
+    <div 
+      ref={setNodeRef}
+      id="pdf-page"
+      className="relative border border-slate-300 shadow-md select-none"
+    >
+      {children}
+    </div>
+  );
+}
+
+// Draggable Placed Signature Box
+function DraggableSignatureBox({ sig, idx }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: `move-signature-${sig._id}`,
+  });
+
+  const style = {
+    left: `${sig.x}%`,
+    top: `${sig.y}%`,
+    transform: transform
+      ? `translate3d(calc(-50% + ${transform.x}px), calc(-50% + ${transform.y}px), 0)`
+      : 'translate(-50%, -50%)',
+    zIndex: isDragging ? 50 : 10,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...listeners}
+      {...attributes}
+      className="absolute bg-teal-500/20 border border-teal-500 text-teal-700 text-[9px] font-bold px-2.5 py-1 rounded shadow-md cursor-move select-none whitespace-nowrap hover:bg-teal-500/30 transition duration-150 flex items-center gap-1.5"
+    >
+      <svg className="w-3 h-3 text-teal-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+      </svg>
+      Sign Here
+    </div>
+  );
+}
 
 function App() {
   // Navigation State: 'login', 'register', or 'dashboard'
   const [view, setView] = useState('login');
   
-  // Registration Form State
-  const [regName, setRegName] = useState('');
-  const [regEmail, setRegEmail] = useState('');
-  const [regPassword, setRegPassword] = useState('');
-  
-  // Login Form State
-  const [loginEmail, setLoginEmail] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
+  const { register: registerLogin, handleSubmit: handleSubmitLogin, reset: resetLoginForm } = useForm();
+  const { register: registerReg, handleSubmit: handleSubmitReg, reset: resetRegForm } = useForm();
 
   // User Session State
   const [user, setUser] = useState(null);
@@ -426,16 +498,28 @@ function App() {
   };
 
   // Submit: Register User
-  const handleRegister = async (e) => {
-    e.preventDefault();
+  const handleRegister = async (data) => {
     setErrorMessage('');
     setSuccessMessage('');
 
+    // Zod Validation Schema
+    const registerSchema = z.object({
+      name: z.string().min(1, 'Full name is required.'),
+      email: z.string().email('Please enter a valid email address.'),
+      password: z.string().min(6, 'Password must be at least 6 characters.')
+    });
+
+    const validation = registerSchema.safeParse(data);
+    if (!validation.success) {
+      setErrorMessage(validation.error.errors[0].message);
+      return;
+    }
+
     try {
       const response = await axios.post('http://localhost:5000/api/auth/register', {
-        name: regName,
-        email: regEmail,
-        password: regPassword
+        name: data.name,
+        email: data.email,
+        password: data.password
       });
 
       const userToken = response.data.token;
@@ -445,9 +529,7 @@ function App() {
       setUser(response.data);
       setSuccessMessage('Account created successfully!');
       
-      setRegName('');
-      setRegEmail('');
-      setRegPassword('');
+      resetRegForm();
     } catch (error) {
       const msg = error.response && error.response.data && error.response.data.message
         ? error.response.data.message
@@ -457,15 +539,26 @@ function App() {
   };
 
   // Submit: Log In User
-  const handleLogin = async (e) => {
-    e.preventDefault();
+  const handleLogin = async (data) => {
     setErrorMessage('');
     setSuccessMessage('');
 
+    // Zod Validation Schema
+    const loginSchema = z.object({
+      email: z.string().email('Please enter a valid email address.'),
+      password: z.string().min(1, 'Password is required.')
+    });
+
+    const validation = loginSchema.safeParse(data);
+    if (!validation.success) {
+      setErrorMessage(validation.error.errors[0].message);
+      return;
+    }
+
     try {
       const response = await axios.post('http://localhost:5000/api/auth/login', {
-        email: loginEmail,
-        password: loginPassword
+        email: data.email,
+        password: data.password
       });
 
       const userToken = response.data.token;
@@ -475,8 +568,7 @@ function App() {
       setUser(response.data);
       setSuccessMessage('Logged in successfully!');
 
-      setLoginEmail('');
-      setLoginPassword('');
+      resetLoginForm();
     } catch (error) {
       const msg = error.response && error.response.data && error.response.data.message
         ? error.response.data.message
@@ -541,27 +633,40 @@ function App() {
     setPageNumber(1);
   };
 
-  // HTML5 Drag Drop Handler: Drop element onto PDF page canvas
-  const handlePageDrop = async (e) => {
-    e.preventDefault();
-    if (!activeDocumentId || isSigned) return;
+  // dnd-kit Drag End Handler
+  const handleDragEnd = async (event) => {
+    const { active, over } = event;
+    if (!over || over.id !== 'pdf-page' || !activeDocumentId || isSigned) return;
 
     // Get the page bounding box
-    const rect = e.currentTarget.getBoundingClientRect();
-    
-    // Calculate cursor drop coordinates relative to container
-    const clientX = e.clientX - rect.left;
-    const clientY = e.clientY - rect.top;
+    const rect = document.getElementById('pdf-page')?.getBoundingClientRect();
+    if (!rect) return;
+
+    // Calculate final cursor position at the drop
+    const activatorEvent = event.activatorEvent;
+    let clientX, clientY;
+
+    if (activatorEvent) {
+      if (activatorEvent.touches && activatorEvent.touches.length > 0) {
+        clientX = activatorEvent.touches[0].clientX + event.delta.x;
+        clientY = activatorEvent.touches[0].clientY + event.delta.y;
+      } else if (activatorEvent.clientX !== undefined) {
+        clientX = activatorEvent.clientX + event.delta.x;
+        clientY = activatorEvent.clientY + event.delta.y;
+      } else {
+        return;
+      }
+    } else {
+      return;
+    }
 
     // Convert pixels to relative percentages (0 to 100)
-    const xPercent = (clientX / rect.width) * 100;
-    const yPercent = (clientY / rect.height) * 100;
+    const xPercent = ((clientX - rect.left) / rect.width) * 100;
+    const yPercent = ((clientY - rect.top) / rect.height) * 100;
 
-    // Read the drag payload content
-    const dragData = e.dataTransfer.getData('text/plain');
+    const dragData = active.id;
 
     if (dragData === 'new-signature') {
-      // 1. User dropped a NEW signature field from the sidebar palette
       try {
         const response = await axios.post('http://localhost:5000/api/signatures', {
           documentId: activeDocumentId,
@@ -580,8 +685,7 @@ function App() {
         console.error('Error creating signature position:', error);
         alert('Could not place signature box. Verify you own this document.');
       }
-    } else if (dragData.startsWith('move-signature-')) {
-      // 2. User dragged and dropped an EXISTING signature box to reposition it
+    } else if (typeof dragData === 'string' && dragData.startsWith('move-signature-')) {
       const signatureId = dragData.split('-')[2];
 
       try {
@@ -658,13 +762,12 @@ function App() {
 
             {/* Login Form */}
             {view === 'login' && (
-              <form onSubmit={handleLogin} className="flex flex-col gap-4">
+              <form onSubmit={handleSubmitLogin(handleLogin)} className="flex flex-col gap-4">
                 <div className="flex flex-col gap-1.5">
                   <label className="text-xs font-semibold text-slate-600">Email Address</label>
                   <input 
                     type="email" 
-                    value={loginEmail}
-                    onChange={(e) => setLoginEmail(e.target.value)}
+                    {...registerLogin('email', { required: true })}
                     placeholder="name@email.com" 
                     required
                     className="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-sm focus:outline-none focus:border-teal-500 bg-slate-50/50"
@@ -675,8 +778,7 @@ function App() {
                   <label className="text-xs font-semibold text-slate-600">Password</label>
                   <input 
                     type="password" 
-                    value={loginPassword}
-                    onChange={(e) => setLoginPassword(e.target.value)}
+                    {...registerLogin('password', { required: true })}
                     placeholder="Enter password" 
                     required
                     className="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-sm focus:outline-none focus:border-teal-500 bg-slate-50/50"
@@ -705,13 +807,12 @@ function App() {
 
             {/* Register Form */}
             {view === 'register' && (
-              <form onSubmit={handleRegister} className="flex flex-col gap-4">
+              <form onSubmit={handleSubmitReg(handleRegister)} className="flex flex-col gap-4">
                 <div className="flex flex-col gap-1.5">
                   <label className="text-xs font-semibold text-slate-600">Full Name</label>
                   <input 
                     type="text" 
-                    value={regName}
-                    onChange={(e) => setRegName(e.target.value)}
+                    {...registerReg('name', { required: true })}
                     placeholder="Enter your name" 
                     required
                     className="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-sm focus:outline-none focus:border-teal-500 bg-slate-50/50"
@@ -722,8 +823,7 @@ function App() {
                   <label className="text-xs font-semibold text-slate-600">Email Address</label>
                   <input 
                     type="email" 
-                    value={regEmail}
-                    onChange={(e) => setRegEmail(e.target.value)}
+                    {...registerReg('email', { required: true })}
                     placeholder="name@email.com" 
                     required
                     className="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-sm focus:outline-none focus:border-teal-500 bg-slate-50/50"
@@ -734,8 +834,7 @@ function App() {
                   <label className="text-xs font-semibold text-slate-600">Password (Min 6 chars)</label>
                   <input 
                     type="password" 
-                    value={regPassword}
-                    onChange={(e) => setRegPassword(e.target.value)}
+                    {...registerReg('password', { required: true })}
                     placeholder="Create a password" 
                     required
                     className="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-sm focus:outline-none focus:border-teal-500 bg-slate-50/50"
@@ -789,8 +888,38 @@ function App() {
             </button>
           </header>
 
-          {/* Main Content Area */}
-          <main className="flex-1 max-w-4xl w-full mx-auto p-6 lg:p-8 flex flex-col gap-6">
+          {/* Dashboard Body Wrapper */}
+          <div className="flex-1 flex flex-col md:flex-row">
+            
+            {/* Left Side Profile Panel (Desktop: sidebar, Mobile: top stack) */}
+            {user && (user.name || user.email) && (
+              <aside className="w-full md:w-64 shrink-0 p-6 md:pr-0">
+                <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-4 flex flex-col gap-3">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    Signed in as
+                  </div>
+                  <div>
+                    {user.name && (
+                      <h4 className="text-sm font-bold text-slate-900 leading-tight truncate">
+                        {user.name}
+                      </h4>
+                    )}
+                    {user.email && (
+                      <p className="text-xs text-slate-500 truncate mt-0.5">
+                        {user.email}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5 mt-1 border-t border-slate-100 pt-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                    <span className="text-[10px] font-semibold text-emerald-600">Active account</span>
+                  </div>
+                </div>
+              </aside>
+            )}
+
+            {/* Right Side / Main Content Area (Original structure and width) */}
+            <main className="flex-1 max-w-4xl w-full mx-auto p-6 lg:p-8 flex flex-col gap-6">
             
             {/* Welcome banner */}
             <div>
@@ -1112,172 +1241,145 @@ function App() {
             </div>
 
           </main>
+        </div>
 
           {/* PDF Drag & Drop Editor Modal */}
           {previewFileUrl && (
             <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 overflow-y-auto">
-              <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-4xl flex flex-col shadow-xl my-8">
-                
-                {/* Modal Header */}
-                <div className="border-b border-slate-100 px-6 py-4 flex items-center justify-between">
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-800">
-                      {isSigned ? 'PDF Document Viewer (Signed)' : 'PDF Document Editor'}
-                    </h3>
-                    <p className="text-[10px] text-slate-400 mt-0.5">
-                      {isSigned ? 'Viewing finalized signed PDF document.' : 'Drag fields from the sidebar and drop them on the document pages.'}
-                    </p>
-                  </div>
-                  <button 
-                    onClick={() => { setPreviewFileUrl(''); setActiveDocumentId(''); setSignatures([]); }}
-                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5"
-                  >
-                    Close Editor
-                  </button>
-                </div>
-
-                {/* Editor Content Area (Split View) */}
-                <div className="flex flex-1 min-h-[450px]">
+              <DndContext onDragEnd={handleDragEnd}>
+                <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-4xl flex flex-col shadow-xl my-8">
                   
-                  {/* Left Column: Draggable Fields Palette */}
-                  <div className="w-56 bg-slate-50 border-r border-slate-200 p-4 flex flex-col gap-4">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Signature Tools</span>
-                    
-                    {isSigned ? (
-                      <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-4 text-emerald-800 text-xs font-medium flex flex-col gap-2">
-                        <div className="font-bold text-emerald-900 flex items-center gap-1.5">
-                          ✓ Document Signed
-                        </div>
-                        <p className="leading-relaxed text-[11px] text-emerald-700">
-                          This document has been finalized and signed. No more signature fields can be placed.
-                        </p>
-                        <button
-                          onClick={() => handleDownloadSigned(activeDocumentId, currentDoc?.fileName || 'document.pdf')}
-                          className="mt-2 w-full py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-[10px] transition cursor-pointer text-center"
-                        >
-                          Download Signed PDF
-                        </button>
-                      </div>
-                    ) : (
-                      <>
-                        {/* Draggable Template Block */}
-                        <div
-                          draggable="true"
-                          onDragStart={(e) => {
-                            e.dataTransfer.setData('text/plain', 'new-signature');
-                          }}
-                          className="border border-dashed border-teal-400 bg-teal-50/50 hover:bg-teal-50 text-teal-700 p-4 rounded-xl flex flex-col items-center justify-center text-center cursor-grab active:cursor-grabbing shadow-sm transition duration-150 select-none group"
-                        >
-                          <svg className="w-6 h-6 mb-2 text-teal-600 group-hover:scale-105 transition" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                          </svg>
-                          <span className="text-xs font-bold">Signature Box</span>
-                          <span className="text-[9px] text-slate-400 mt-1">Drag and drop on page</span>
-                        </div>
-
-                        <div className="mt-auto text-[9px] text-slate-400 bg-white border border-slate-200/60 p-3 rounded-lg leading-relaxed">
-                          💡 **Tip**: Drop a box on the PDF. You can drag placed boxes to reposition them anywhere on the page.
-                        </div>
-                      </>
-                    )}
-                  </div>
-
-                  {/* Right Column: PDF Viewer Drop Target */}
-                  <div className="flex-1 p-6 flex flex-col items-center justify-center bg-slate-100/30 overflow-x-auto">
-                    
-                    {/* Bounding box wrapper holding both canvas and absolute overlay elements */}
-                    <div 
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={handlePageDrop}
-                      className="relative border border-slate-300 shadow-md select-none"
+                  {/* Modal Header */}
+                  <div className="border-b border-slate-100 px-6 py-4 flex items-center justify-between">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-800">
+                        {isSigned ? 'PDF Document Viewer (Signed)' : 'PDF Document Editor'}
+                      </h3>
+                      <p className="text-[10px] text-slate-400 mt-0.5">
+                        {isSigned ? 'Viewing finalized signed PDF document.' : 'Drag fields from the sidebar and drop them on the document pages.'}
+                      </p>
+                    </div>
+                    <button 
+                      onClick={() => { setPreviewFileUrl(''); setActiveDocumentId(''); setSignatures([]); }}
+                      className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5"
                     >
-                      <PDFDocument
-                        file={previewFileUrl}
-                        onLoadSuccess={onDocumentLoadSuccess}
-                        loading={<div className="text-xs text-slate-500 font-medium">Loading document...</div>}
-                        error={<div className="text-xs text-rose-500 font-medium">Failed to load PDF preview.</div>}
-                      >
-                        <PDFPage 
-                          pageNumber={pageNumber} 
-                          renderTextLayer={false} 
-                          renderAnnotationLayer={false}
-                          className="max-w-full"
-                        />
-                      </PDFDocument>
+                      Close Editor
+                    </button>
+                  </div>
 
-                      {/* Render absolute overlays of signature positions */}
-                      {!isSigned && signatures
-                        .filter(sig => sig.page === pageNumber)
-                        .map((sig, idx) => (
-                          <div
-                            key={sig._id || idx}
-                            draggable="true"
-                            onDragStart={(e) => {
-                              // Store the ID of the box we are moving
-                              e.dataTransfer.setData('text/plain', `move-signature-${sig._id}`);
-                            }}
-                            style={{
-                              left: `${sig.x}%`,
-                              top: `${sig.y}%`,
-                              transform: 'translate(-50%, -50%)' // Centers the box on cursor drop coordinates
-                            }}
-                            className="absolute bg-teal-500/20 border border-teal-500 text-teal-700 text-[9px] font-bold px-2.5 py-1 rounded shadow-md cursor-move select-none whitespace-nowrap hover:bg-teal-500/30 transition duration-150 flex items-center gap-1.5"
-                          >
-                            <svg className="w-3 h-3 text-teal-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                            </svg>
-                            Sign Here
+                  {/* Editor Content Area (Split View) */}
+                  <div className="flex flex-1 min-h-[450px]">
+                    
+                    {/* Left Column: Draggable Fields Palette */}
+                    <div className="w-56 bg-slate-50 border-r border-slate-200 p-4 flex flex-col gap-4">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Signature Tools</span>
+                      
+                      {isSigned ? (
+                        <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-4 text-emerald-800 text-xs font-medium flex flex-col gap-2">
+                          <div className="font-bold text-emerald-900 flex items-center gap-1.5">
+                            ✓ Document Signed
                           </div>
-                        ))}
+                          <p className="leading-relaxed text-[11px] text-emerald-700">
+                            This document has been finalized and signed. No more signature fields can be placed.
+                          </p>
+                          <button
+                            onClick={() => handleDownloadSigned(activeDocumentId, currentDoc?.fileName || 'document.pdf')}
+                            className="mt-2 w-full py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-[10px] transition cursor-pointer text-center"
+                          >
+                            Download Signed PDF
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          {/* Draggable Template Block */}
+                          <DraggableSidebarItem />
+
+                          <div className="mt-auto text-[9px] text-slate-400 bg-white border border-slate-200/60 p-3 rounded-lg leading-relaxed">
+                            💡 **Tip**: Drop a box on the PDF. You can drag placed boxes to reposition them anywhere on the page.
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Right Column: PDF Viewer Drop Target */}
+                    <div className="flex-1 p-6 flex flex-col items-center justify-center bg-slate-100/30 overflow-x-auto">
+                      
+                      {/* Bounding box wrapper holding both canvas and absolute overlay elements */}
+                      <DroppablePDFContainer>
+                        <PDFDocument
+                          file={previewFileUrl}
+                          onLoadSuccess={onDocumentLoadSuccess}
+                          loading={<div className="text-xs text-slate-500 font-medium">Loading document...</div>}
+                          error={<div className="text-xs text-rose-500 font-medium">Failed to load PDF preview.</div>}
+                        >
+                          <PDFPage 
+                            pageNumber={pageNumber} 
+                            renderTextLayer={false} 
+                            renderAnnotationLayer={false}
+                            className="max-w-full"
+                          />
+                        </PDFDocument>
+
+                        {/* Render absolute overlays of signature positions */}
+                        {!isSigned && signatures
+                          .filter(sig => sig.page === pageNumber)
+                          .map((sig, idx) => (
+                            <DraggableSignatureBox 
+                              key={sig._id || idx}
+                              sig={sig}
+                              idx={idx}
+                            />
+                          ))}
+                      </DroppablePDFContainer>
+
                     </div>
 
                   </div>
 
-                </div>
-
-                {/* Modal Footer Page Controls */}
-                <div className="border-t border-slate-100 px-6 py-4 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="text-xs text-slate-500 font-medium">
-                              Page {pageNumber} of {numPages || '?'}
+                  {/* Modal Footer Page Controls */}
+                  <div className="border-t border-slate-100 px-6 py-4 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="text-xs text-slate-500 font-medium">
+                                Page {pageNumber} of {numPages || '?'}
+                      </div>
+                      {!isSigned && currentDoc?.signerType === 'only-you' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsOwnerSigModalOpen(true);
+                            setOwnerSigName(user?.name || '');
+                            setOwnerSigMode('typed');
+                            setOwnerSigFont('Caveat');
+                          }}
+                          className="px-4 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition cursor-pointer shadow-sm"
+                        >
+                          Generate Signed PDF
+                        </button>
+                      )}
                     </div>
-                    {!isSigned && currentDoc?.signerType === 'only-you' && (
+                    
+                    <div className="flex gap-2">
                       <button
                         type="button"
-                        onClick={() => {
-                          setIsOwnerSigModalOpen(true);
-                          setOwnerSigName(user?.name || '');
-                          setOwnerSigMode('typed');
-                          setOwnerSigFont('Caveat');
-                        }}
-                        className="px-4 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition cursor-pointer shadow-sm"
+                        disabled={pageNumber <= 1}
+                        onClick={() => setPageNumber(prev => Math.max(prev - 1, 1))}
+                        className="px-3 py-1 bg-slate-100 border border-slate-200 hover:bg-slate-200 disabled:bg-slate-50 disabled:text-slate-300 rounded-lg text-xs font-semibold transition cursor-pointer"
                       >
-                        Generate Signed PDF
+                        Previous
                       </button>
-                    )}
+                      <button
+                        type="button"
+                        disabled={pageNumber >= numPages}
+                        onClick={() => setPageNumber(prev => Math.min(prev + 1, numPages))}
+                        className="px-3 py-1 bg-slate-100 border border-slate-200 hover:bg-slate-200 disabled:bg-slate-50 disabled:text-slate-300 rounded-lg text-xs font-semibold transition cursor-pointer"
+                      >
+                        Next
+                      </button>
+                    </div>
                   </div>
-                  
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      disabled={pageNumber <= 1}
-                      onClick={() => setPageNumber(prev => Math.max(prev - 1, 1))}
-                      className="px-3 py-1 bg-slate-100 border border-slate-200 hover:bg-slate-200 disabled:bg-slate-50 disabled:text-slate-300 rounded-lg text-xs font-semibold transition cursor-pointer"
-                    >
-                      Previous
-                    </button>
-                    <button
-                      type="button"
-                      disabled={pageNumber >= numPages}
-                      onClick={() => setPageNumber(prev => Math.min(prev + 1, numPages))}
-                      className="px-3 py-1 bg-slate-100 border border-slate-200 hover:bg-slate-200 disabled:bg-slate-50 disabled:text-slate-300 rounded-lg text-xs font-semibold transition cursor-pointer"
-                    >
-                      Next
-                    </button>
-                  </div>
-                </div>
 
-              </div>
+                </div>
+              </DndContext>
             </div>
           )}
 
