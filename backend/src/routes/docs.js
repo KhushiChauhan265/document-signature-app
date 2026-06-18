@@ -516,7 +516,7 @@ router.post('/:id/share', protect, async (req, res) => {
     const failed = [];
 
     // Verify whether email credentials and frontend url are configured in .env
-    const isEnvConfigured = !!(process.env.EMAIL_USER && process.env.EMAIL_PASS && process.env.EMAIL_FROM && process.env.CLIENT_PUBLIC_SIGN_URL);
+    const isEnvConfigured = !!(process.env.EMAIL_USER && process.env.EMAIL_PASS && process.env.EMAIL_FROM && (process.env.FRONTEND_URL || process.env.CLIENT_PUBLIC_SIGN_URL));
 
     // Setup Nodemailer transporter if config is present
     const nodemailer = require('nodemailer');
@@ -547,7 +547,7 @@ router.post('/:id/share', protect, async (req, res) => {
       });
 
       // Construct signing link
-      const link = `${process.env.CLIENT_PUBLIC_SIGN_URL || 'http://localhost:5173'}/?token=${token}`;
+      const link = `${process.env.FRONTEND_URL || process.env.CLIENT_PUBLIC_SIGN_URL || 'http://localhost:5173'}/?token=${token}`;
 
       if (isEnvConfigured && transporter) {
         const mailOptions = {
@@ -570,7 +570,9 @@ router.post('/:id/share', protect, async (req, res) => {
         if (!process.env.EMAIL_USER) missingVars.push('EMAIL_USER');
         if (!process.env.EMAIL_PASS) missingVars.push('EMAIL_PASS');
         if (!process.env.EMAIL_FROM) missingVars.push('EMAIL_FROM');
-        if (!process.env.CLIENT_PUBLIC_SIGN_URL) missingVars.push('CLIENT_PUBLIC_SIGN_URL');
+        if (!process.env.FRONTEND_URL && !process.env.CLIENT_PUBLIC_SIGN_URL) {
+          missingVars.push('FRONTEND_URL or CLIENT_PUBLIC_SIGN_URL');
+        }
 
         const errorMsg = missingVars.length > 0
           ? `Email not sent. Missing env variables: ${missingVars.join(', ')}`

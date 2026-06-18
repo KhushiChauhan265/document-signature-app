@@ -83,6 +83,9 @@ function DraggableSignatureBox({ sig, idx }) {
   );
 }
 
+// Dynamic backend API base URL resolver (Vite environment variables)
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+
 function App() {
   // Navigation State: 'login', 'register', or 'dashboard'
   const [view, setView] = useState('login');
@@ -238,10 +241,10 @@ function App() {
   const fetchPublicDocument = async (tokenParam) => {
     setPublicSignError('');
     try {
-      const response = await axios.get(`http://localhost:5000/api/docs/public/verify/${tokenParam}`);
+      const response = await axios.get(`${API_BASE_URL}/api/docs/public/verify/${tokenParam}`);
       setPublicDoc(response.data.document);
       setPublicSignatures(response.data.signatures);
-      setPreviewFileUrl(`http://localhost:5000/api/docs/public/view/${tokenParam}`);
+      setPreviewFileUrl(`${API_BASE_URL}/api/docs/public/view/${tokenParam}`);
       setPageNumber(1);
     } catch (error) {
       console.error('Failed to verify public signing link:', error);
@@ -273,7 +276,7 @@ function App() {
     setIsSigningPublic(true);
     setPublicSignError('');
     try {
-      await axios.post(`http://localhost:5000/api/docs/public/sign/${publicToken}`, {
+      await axios.post(`${API_BASE_URL}/api/docs/public/sign/${publicToken}`, {
         signerName,
         signatureMode: sigMode,
         signatureFont: sigMode === 'handwritten' ? sigFont : undefined,
@@ -299,7 +302,7 @@ function App() {
 
     setIsRejectingPublic(true);
     try {
-      await axios.post(`http://localhost:5000/api/docs/public/reject/${publicToken}`, {
+      await axios.post(`${API_BASE_URL}/api/docs/public/reject/${publicToken}`, {
         rejectReason
       });
       setView('public-rejected');
@@ -330,7 +333,7 @@ function App() {
     setShareResults(null);
 
     try {
-      const response = await axios.post(`http://localhost:5000/api/docs/${shareDocId}/share`, {
+      const response = await axios.post(`${API_BASE_URL}/api/docs/${shareDocId}/share`, {
         emails: emailsArray
       }, {
         headers: {
@@ -358,7 +361,7 @@ function App() {
   // Fetch user profile from backend using JWT
   const fetchUserProfile = async (authToken) => {
     try {
-      const response = await axios.get('http://localhost:5000/api/auth/me', {
+      const response = await axios.get(`${API_BASE_URL}/api/auth/me`, {
         headers: {
           Authorization: `Bearer ${authToken}`
         }
@@ -374,7 +377,7 @@ function App() {
   // Fetch all documents uploaded by this user
   const fetchDocuments = async (authToken) => {
     try {
-      const response = await axios.get('http://localhost:5000/api/docs/', {
+      const response = await axios.get(`${API_BASE_URL}/api/docs/`, {
         headers: {
           Authorization: `Bearer ${authToken}`
         }
@@ -388,7 +391,7 @@ function App() {
   // Fetch saved signature positions for a document
   const fetchSignatures = async (docId, authToken) => {
     try {
-      const response = await axios.get(`http://localhost:5000/api/signatures/${docId}`, {
+      const response = await axios.get(`${API_BASE_URL}/api/signatures/${docId}`, {
         headers: {
           Authorization: `Bearer ${authToken}`
         }
@@ -402,7 +405,7 @@ function App() {
   // Download finalized signed PDF securely
   const handleDownloadSigned = async (docId, fileName) => {
     try {
-      const response = await axios.get(`http://localhost:5000/api/docs/${docId}/download-signed`, {
+      const response = await axios.get(`${API_BASE_URL}/api/docs/${docId}/download-signed`, {
         headers: {
           Authorization: `Bearer ${token}`
         },
@@ -442,7 +445,7 @@ function App() {
     }
 
     try {
-      const response = await axios.post(`http://localhost:5000/api/docs/${activeDocumentId}/finalize`, {
+      const response = await axios.post(`${API_BASE_URL}/api/docs/${activeDocumentId}/finalize`, {
         signatureMode: ownerSigMode,
         signatureFont: ownerSigMode === 'handwritten' ? ownerSigFont : undefined,
         signatureData
@@ -456,7 +459,7 @@ function App() {
       await fetchDocuments(token);
       
       // Load the finalized signed PDF in preview
-      const downloadResponse = await axios.get(`http://localhost:5000/api/docs/${activeDocumentId}/download-signed`, {
+      const downloadResponse = await axios.get(`${API_BASE_URL}/api/docs/${activeDocumentId}/download-signed`, {
         headers: {
           Authorization: `Bearer ${token}`
         },
@@ -480,7 +483,7 @@ function App() {
   // View finalized signed PDF in the preview modal
   const handleViewSignedDocument = async (doc) => {
     try {
-      const response = await axios.get(`http://localhost:5000/api/docs/${doc._id}/download-signed`, {
+      const response = await axios.get(`${API_BASE_URL}/api/docs/${doc._id}/download-signed`, {
         headers: {
           Authorization: `Bearer ${token}`
         },
@@ -516,7 +519,7 @@ function App() {
     }
 
     try {
-      const response = await axios.post('http://localhost:5000/api/auth/register', {
+      const response = await axios.post(`${API_BASE_URL}/api/auth/register`, {
         name: data.name,
         email: data.email,
         password: data.password
@@ -556,7 +559,7 @@ function App() {
     }
 
     try {
-      const response = await axios.post('http://localhost:5000/api/auth/login', {
+      const response = await axios.post(`${API_BASE_URL}/api/auth/login`, {
         email: data.email,
         password: data.password
       });
@@ -604,7 +607,7 @@ function App() {
     formData.append('signerType', signerType);
 
     try {
-      const response = await axios.post('http://localhost:5000/api/docs/upload', formData, {
+      const response = await axios.post(`${API_BASE_URL}/api/docs/upload`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
           Authorization: `Bearer ${token}`
@@ -668,7 +671,7 @@ function App() {
 
     if (dragData === 'new-signature') {
       try {
-        const response = await axios.post('http://localhost:5000/api/signatures', {
+        const response = await axios.post(`${API_BASE_URL}/api/signatures`, {
           documentId: activeDocumentId,
           x: parseFloat(xPercent.toFixed(2)),
           y: parseFloat(yPercent.toFixed(2)),
@@ -689,7 +692,7 @@ function App() {
       const signatureId = dragData.split('-')[2];
 
       try {
-        const response = await axios.put(`http://localhost:5000/api/signatures/${signatureId}`, {
+        const response = await axios.put(`${API_BASE_URL}/api/signatures/${signatureId}`, {
           x: parseFloat(xPercent.toFixed(2)),
           y: parseFloat(yPercent.toFixed(2)),
           page: pageNumber
@@ -1108,7 +1111,7 @@ function App() {
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          setPreviewFileUrl(`http://localhost:5000/uploads/${doc.filePath}`);
+                                          setPreviewFileUrl(`${API_BASE_URL}/uploads/${doc.filePath}`);
                                           setActiveDocumentId(doc._id);
                                           fetchSignatures(doc._id, token);
                                           setPageNumber(1);
@@ -1203,7 +1206,7 @@ function App() {
                                     <button
                                       type="button"
                                       onClick={() => {
-                                        setPreviewFileUrl(`http://localhost:5000/uploads/${doc.filePath}`);
+                                        setPreviewFileUrl(`${API_BASE_URL}/uploads/${doc.filePath}`);
                                         setActiveDocumentId(doc._id);
                                         fetchSignatures(doc._id, token);
                                         setPageNumber(1);
