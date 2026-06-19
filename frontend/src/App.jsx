@@ -353,6 +353,7 @@ function App() {
       console.error('Failed to generate sharing link:', error);
       const msg = error.response?.data?.message || 'Failed to generate sharing link.';
       setShareError(msg);
+      alert('Error from backend: ' + msg);
     } finally {
       setIsGeneratingLink(false);
     }
