@@ -7,7 +7,7 @@ const signatureRoutes = require('./routes/signatures');
 const auditRoutes = require('./routes/audit');
 
 const app = express();
-
+//completed project
 // Global Middleware
 // CORS allows our React frontend (running on a different port) to fetch data from this server
 app.use(cors());

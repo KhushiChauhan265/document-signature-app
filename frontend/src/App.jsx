@@ -4,7 +4,7 @@ import { Document as PDFDocument, Page as PDFPage, pdfjs } from 'react-pdf';
 import { DndContext, useDraggable, useDroppable } from '@dnd-kit/core';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
-
+//completed project
 // Configure the pdfjs worker to resolve react-pdf dependency
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
