@@ -516,27 +516,7 @@ router.post('/:id/share', protect, async (req, res) => {
     const failed = [];
 
     // Verify whether email credentials and frontend url are configured in .env
-    const isEnvConfigured = !!(process.env.EMAIL_USER && process.env.EMAIL_PASS && process.env.EMAIL_FROM && (process.env.FRONTEND_URL || process.env.CLIENT_PUBLIC_SIGN_URL));
-
-    // Setup Nodemailer transporter if config is present
-    const nodemailer = require('nodemailer');
-    let transporter;
-    if (isEnvConfigured) {
-      try {
-        transporter = nodemailer.createTransport({
-          service: 'gmail',
-          auth: {
-            user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_PASS
-          },
-          connectionTimeout: 10000, // 10 seconds
-          greetingTimeout: 10000,
-          socketTimeout: 10000
-        });
-      } catch (err) {
-        console.error('Nodemailer transporter initialization failed:', err.message);
-      }
-    }
+    const isEnvConfigured = !!(process.env.BREVO_API_KEY && process.env.EMAIL_FROM && (process.env.FRONTEND_URL || process.env.CLIENT_PUBLIC_SIGN_URL));
 
     for (const email of uniqueEmails) {
       const token = crypto.randomBytes(32).toString('hex');
@@ -552,26 +532,39 @@ router.post('/:id/share', protect, async (req, res) => {
       // Construct signing link
       const link = `${process.env.FRONTEND_URL || process.env.CLIENT_PUBLIC_SIGN_URL || 'http://localhost:5173'}/?token=${token}`;
 
-      if (isEnvConfigured && transporter) {
-        const mailOptions = {
-          from: process.env.EMAIL_FROM,
-          to: email,
+      if (isEnvConfigured) {
+        const payload = {
+          sender: { email: process.env.EMAIL_FROM },
+          to: [{ email }],
           subject: `Signature Invitation for document: ${document.fileName}`,
-          text: `Hello,\n\nYou have been invited to sign the document "${document.fileName}" as an external signer.\n\nPlease open the following link to review and sign the document:\n\n${link}\n\nThis link will expire in 24 hours.\n\nThank you!`
+          textContent: `Hello,\n\nYou have been invited to sign the document "${document.fileName}" as an external signer.\n\nPlease open the following link to review and sign the document:\n\n${link}\n\nThis link will expire in 24 hours.\n\nThank you!`
         };
 
         try {
-          await transporter.sendMail(mailOptions);
+          const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+            method: 'POST',
+            headers: {
+              'api-key': process.env.BREVO_API_KEY,
+              'Content-Type': 'application/json',
+              'Accept': 'application/json'
+            },
+            body: JSON.stringify(payload)
+          });
+
+          if (!response.ok) {
+            const errorData = await response.text();
+            throw new Error(`Brevo API Error ${response.status}: ${errorData}`);
+          }
+
           sent.push({ email, link, status: 'sent' });
         } catch (mailErr) {
-          console.error(`SMTP delivery failed to ${email}:`, mailErr.message);
-          failed.push({ email, error: `SMTP delivery failed: ${mailErr.message}`, link });
+          console.error(`Brevo delivery failed to ${email}:`, mailErr.message);
+          failed.push({ email, error: `Brevo delivery failed: ${mailErr.message}`, link });
         }
       } else {
         // Collect missing environment variables
         const missingVars = [];
-        if (!process.env.EMAIL_USER) missingVars.push('EMAIL_USER');
-        if (!process.env.EMAIL_PASS) missingVars.push('EMAIL_PASS');
+        if (!process.env.BREVO_API_KEY) missingVars.push('BREVO_API_KEY');
         if (!process.env.EMAIL_FROM) missingVars.push('EMAIL_FROM');
         if (!process.env.FRONTEND_URL && !process.env.CLIENT_PUBLIC_SIGN_URL) {
           missingVars.push('FRONTEND_URL or CLIENT_PUBLIC_SIGN_URL');
@@ -579,7 +572,7 @@ router.post('/:id/share', protect, async (req, res) => {
 
         const errorMsg = missingVars.length > 0
           ? `Email not sent. Missing env variables: ${missingVars.join(', ')}`
-          : 'Email not sent. SMTP initialization failed.';
+          : 'Email not sent. API configuration failed.';
 
         failed.push({ email, error: errorMsg, link });
       }
@@ -600,7 +593,7 @@ router.post('/:id/share', protect, async (req, res) => {
 
     let message = 'Signing links generated successfully';
     if (!isEnvConfigured) {
-      message = 'Signing links generated, but emails were not sent because SMTP credentials are missing in the backend .env';
+      message = 'Signing links generated, but emails were not sent because Brevo credentials are missing in the backend .env';
     } else if (failed.length > 0) {
       message = sent.length > 0
         ? 'Signing links generated; some invitation emails failed to send.'
